@@ -1,4 +1,8 @@
+use std::collections::BTreeMap;
+use std::mem::size_of;
 use std::sync::Arc;
+use bytemuck::{Pod, Zeroable};
+use nalgebra::Matrix4;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 
@@ -9,17 +13,20 @@ use vulkano::image::{Image, ImageUsage};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
 use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::pipeline::compute::ComputePipelineCreateInfo;
-use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
+use vulkano::pipeline::layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo, PushConstantRange};
 use vulkano::swapchain::{acquire_next_image, ColorSpace, Surface, Swapchain, SwapchainCreateFlags, SwapchainCreateInfo, SwapchainPresentInfo};
 use vulkano::{sync, Validated, VulkanError};
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
+use vulkano::buffer::{Buffer, BufferCreateFlags, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::layout::{DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateFlags, DescriptorSetLayoutCreateInfo, DescriptorType};
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
-use vulkano::memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::shader::ShaderStages;
 use vulkano::sync::GpuFuture;
 use winit::event_loop::EventLoop;
-use winit::window::{Window, WindowBuilder};
+use winit::window::{CursorGrabMode, Fullscreen, Window, WindowBuilder};
+use crate::player::Player;
 
 mod cs {
 	vulkano_shaders::shader! {
@@ -28,16 +35,6 @@ mod cs {
     }
 }
 
-struct Uniforms{
-	time: f32,
-}//Todo
-impl Uniforms{
-	fn new(time: f32) -> Self{
-		Self{
-			time
-		}
-	}
-}
 pub struct GraphicsHandler{
 	window: Arc<Window>,
 	device: Arc<Device>,
@@ -46,9 +43,9 @@ pub struct GraphicsHandler{
 	images: Vec<Arc<Image>>,
 	compute_pipeline: Arc<ComputePipeline>,
 	descriptor_set_allocator: StandardDescriptorSetAllocator,
-	command_buffers: Vec<Arc<PrimaryAutoCommandBuffer>>,
 	pub(crate) recreate_swapchain: bool,
 	memory_allocator: Arc<StandardMemoryAllocator>,
+	descriptor_sets: Vec<Arc<PersistentDescriptorSet>>,
 }
 
 
@@ -88,6 +85,8 @@ impl GraphicsHandler{
 				.build(&event_loop)
 				.unwrap(),
 		);
+		window.set_cursor_visible(false);
+		window.set_fullscreen(Some(Fullscreen::Borderless(None)));
 		let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 		let device_extensions = DeviceExtensions {
 			khr_swapchain: true,
@@ -152,11 +151,43 @@ impl GraphicsHandler{
 			..PipelineShaderStageCreateInfo::new(cs)
 		};
 		
-		let layout = PipelineLayout::new(
+		let bindings: BTreeMap<u32, DescriptorSetLayoutBinding> = {
+			let mut bindings = BTreeMap::default();
+			bindings.insert(0, DescriptorSetLayoutBinding {
+				stages: ShaderStages::COMPUTE,
+				..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageImage)
+			});/*
+			bindings.insert(1, DescriptorSetLayoutBinding {
+				stages: ShaderStages::COMPUTE,
+				..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::Pu)
+			});*/
+			bindings
+		};
+		
+		
+		
+		let pipeline_layout = PipelineLayout::new(
 			device.clone(),
-			PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
-				.into_pipeline_layout_create_info(device.clone())
-				.unwrap(),
+			PipelineLayoutCreateInfo{
+				set_layouts: vec![
+					DescriptorSetLayout::new(
+						device.clone(),
+						DescriptorSetLayoutCreateInfo{
+							flags: DescriptorSetLayoutCreateFlags::empty(),
+							bindings,
+							..Default::default()
+						}
+					).expect("Failed to create DescriptorSetLayout")
+				],
+				push_constant_ranges: vec!(
+					PushConstantRange{
+						stages: ShaderStages::COMPUTE,
+						offset: 0u32,
+						size: 64u32,
+					}
+				),
+				..Default::default()
+			}
 		)
 			.unwrap();
 		
@@ -164,7 +195,7 @@ impl GraphicsHandler{
 			device.clone(),
 			None,
 			ComputePipelineCreateInfo {
-				..ComputePipelineCreateInfo::stage_layout(stage, layout)
+				..ComputePipelineCreateInfo::stage_layout(stage, pipeline_layout)
 			},
 		)
 			.expect("failed to create compute pipeline");
@@ -172,6 +203,9 @@ impl GraphicsHandler{
 		let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone(), Default::default());
 		
 		let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
+		
+		
+		
 		(Self{
 			window,
 			device,
@@ -180,13 +214,13 @@ impl GraphicsHandler{
 			images,
 			compute_pipeline,
 			descriptor_set_allocator,
-			command_buffers: vec!(),
+			descriptor_sets: vec!(),
 			recreate_swapchain: true,
 			memory_allocator,
 		}, event_loop)
 	}
 	
-	pub fn redraw(&mut self){
+	pub fn redraw(&mut self, push_constant_data: Player){
 		if self.recreate_swapchain {
 			(self.swapchain, self.images) = self.swapchain
 				.recreate(SwapchainCreateInfo {
@@ -195,14 +229,7 @@ impl GraphicsHandler{
 				})
 				.expect("Failed to recreate Swapchain");
 			
-			self.command_buffers = create_command_buffers(
-				&mut self.images,
-				&mut self.compute_pipeline,
-				&self.descriptor_set_allocator,
-				self.queue.clone(),
-				self.window.clone(),
-				self.memory_allocator.clone()
-			);
+			self.create_command_buffers();
 			
 			self.recreate_swapchain = false;
 		}
@@ -220,9 +247,43 @@ impl GraphicsHandler{
 			self.recreate_swapchain = true;
 		}
 		
+		let command_buffer = {
+			let command_buffer_allocator = StandardCommandBufferAllocator::new(
+				self.compute_pipeline.device().clone(),
+				Default::default(),
+			);
+			
+			let mut builder = AutoCommandBufferBuilder::primary(
+				&command_buffer_allocator,
+				self.queue.queue_family_index(),
+				CommandBufferUsage::MultipleSubmit,
+			).unwrap();
+			
+			builder
+				.bind_pipeline_compute(self.compute_pipeline.clone())
+				.unwrap()
+				.push_constants(self.compute_pipeline.layout().clone(), 0, push_constant_data)
+				.unwrap()
+				.bind_descriptor_sets(
+					PipelineBindPoint::Compute,
+					self.compute_pipeline.layout().clone(),
+					0,
+					self.descriptor_sets[image_index as usize].clone(),
+				)
+				.unwrap()
+				.dispatch([
+					self.window.inner_size().width,
+					self.window.inner_size().height,
+					1,
+				])
+				.unwrap();
+			
+			builder.build().unwrap()
+		};
+		
 		let future = sync::now(self.device.clone())
 			.join(acquire_future)
-			.then_execute(self.queue.clone(), self.command_buffers[image_index as usize].clone())
+			.then_execute(self.queue.clone(), command_buffer.clone())
 			.unwrap()
 			.then_swapchain_present(
 				self.queue.clone(),
@@ -232,71 +293,31 @@ impl GraphicsHandler{
 			.unwrap();
 		
 		future.wait(None).unwrap();
-		
 	}
-}
-
-
-fn create_command_buffers(
-	images: &mut Vec<Arc<Image>>,
-	compute_pipeline: &mut Arc<ComputePipeline>,
-	descriptor_set_allocator: &StandardDescriptorSetAllocator,
-	queue: Arc<Queue>,
-	window: Arc<Window>,
-	memory_allocator: Arc<StandardMemoryAllocator>,
-) -> Vec<Arc<PrimaryAutoCommandBuffer>> {
-	let mut command_buffers = vec![];
-	let layout = compute_pipeline.layout().set_layouts().get(0).unwrap();
 	
-	for img in images {
-		let image_view =
-			ImageView::new(img.clone(), ImageViewCreateInfo::from_image(&*img)).unwrap();
+	
+	
+	fn create_command_buffers( &mut self ){
+		let mut sets = vec![];
+		let layout = self.compute_pipeline.layout().set_layouts().get(0).unwrap();
 		
-		
-		let set = PersistentDescriptorSet::new(
-			descriptor_set_allocator,
-			layout.clone(),
-			[
-				WriteDescriptorSet::image_view(0, image_view),
-			],
-			[],
-		)
-			.unwrap();
-		let command_buffer = {
-			let command_buffer_allocator = StandardCommandBufferAllocator::new(
-				compute_pipeline.device().clone(),
-				Default::default(),
-			);
+		for img in &self.images {
+			let image_view =
+				ImageView::new(img.clone(), ImageViewCreateInfo::from_image(&*img)).unwrap();
 			
-			let mut builder = AutoCommandBufferBuilder::primary(
-				&command_buffer_allocator,
-				queue.queue_family_index(),
-				CommandBufferUsage::MultipleSubmit,
+			
+			let set = PersistentDescriptorSet::new(
+				&self.descriptor_set_allocator,
+				layout.clone(),
+				[
+					WriteDescriptorSet::image_view(0, image_view),
+				],
+				[],
 			)
 				.unwrap();
-			builder
-				.bind_pipeline_compute(compute_pipeline.clone())
-				.unwrap()
-				.bind_descriptor_sets(
-					PipelineBindPoint::Compute,
-					compute_pipeline.layout().clone(),
-					0,
-					set.clone(),
-				)
-				.unwrap()
-				.dispatch([
-					window.inner_size().width,
-					window.inner_size().height,
-					1,
-				])
-				.unwrap();
-			
-			builder.build().unwrap()
-		};
+			sets.push(set);
+		}
 		
-		
-		command_buffers.push(command_buffer);
+		self.descriptor_sets = sets;
 	}
-	
-	command_buffers
 }
