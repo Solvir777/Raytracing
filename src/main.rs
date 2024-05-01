@@ -4,7 +4,6 @@ use crate::player::Player;
 use std::time::SystemTime;
 use winit::event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent};
 use winit::event_loop::ControlFlow;
-use rand::random;
 
 mod graphics_handler;
 mod input_helper;
@@ -65,8 +64,8 @@ fn main() {
 
                 
                 let mut submit_player = Player::new();
-                submit_player.transformation_matrix = player.transformation_matrix.try_inverse().unwrap();
-                graphics_handler.redraw(submit_player);
+                submit_player.transformation_matrix = player.transformation_matrix;
+                graphics_handler.redraw(player);
             }
             _ => {}
         };

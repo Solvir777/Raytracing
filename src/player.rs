@@ -11,7 +11,7 @@ impl Player {
 	const SPEED: f32 = 5.;
 	pub fn new() -> Self{
 		Self{
-			transformation_matrix: Matrix4::<f32>::identity().append_translation(&Vector3::<f32>::new(0., -5., 0.)),
+			transformation_matrix: Matrix4::<f32>::identity().append_translation(&Vector3::<f32>::new(0., 5., 0.)),
 		}
 	}
 	
@@ -25,6 +25,7 @@ impl Player {
 					Vector3::<f32>::new(local_z.z, 0., -local_z.x).normalize()
 				)
 			};
+			
 			let (w, a, s, d, space, shift) = input_helper.get_wasd_up_down();
 			if (w != s) || (a != d) || (shift != space) {
 				(Vector3::<f32>::zeros()
@@ -37,7 +38,7 @@ impl Player {
 				).normalize() * Player::SPEED * delta_time
 			}
 			else {Vector3::<f32>::zeros()}
-		};
+		} as Vector3<f32>;
 		fn create_rotation_mat( angles: (f32, f32)) -> Matrix4<f32>{
 			let rotation_x = Matrix4::new_rotation(Vector3::new(1., 0., 0.) * angles.0);
 			let rotation_y = Matrix4::new_rotation(Vector3::new(0., 1., 0.) * angles.1);
@@ -46,9 +47,9 @@ impl Player {
 		
 		
 		self.transformation_matrix = create_rotation_mat((view_direction.1, view_direction.0))
-			.append_translation(&(&(self.transformation_matrix.column(3).xyz()) - movement));
+			.append_translation(&(&(self.transformation_matrix.column(3).xyz()) + movement));
 		
-		//println!("player position: {:?}", (self.transformation_matrix.m14, self.transformation_matrix.m24, self.transformation_matrix.m34));
+		//println!("player position: {}", self.transformation_matrix);
 		//println!("but could also be: {:?}", (self.transformation_matrix.m41, self.transformation_matrix.m42, self.transformation_matrix.m43));
 	}
 }

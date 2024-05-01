@@ -23,6 +23,7 @@ impl InputHelper {
 	}
 	
 	pub fn get_wasd_up_down(&self) -> (bool, bool, bool, bool, bool, bool) {
+		println!("{:?}", self.pressed_keys.clone());
 		(
 			self.pressed_keys.contains(&VirtualKeyCode::W),
 			self.pressed_keys.contains(&VirtualKeyCode::A),
