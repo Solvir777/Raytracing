@@ -24,12 +24,10 @@ int min_index(vec3 i) {
     return 2;
 }
 vec3 cast_ray() {
-    vec2 norm_coordinates = (gl_GlobalInvocationID.xy / vec2(imageSize(img)) - vec2(0.5));
+    const vec2 img_size = imageSize(img);
+    vec2 norm_coordinates = (gl_GlobalInvocationID.xy / vec2(img_size.x)) - vec2(0.5, img_size.y / img_size.x * 0.5);
     vec3 rd = (vec4(norm_coordinates, 1., 1.) * player.transform).xyz;
     vec3 ro = player.transform[3].xyz;
-
-
-
 
 
     vec3 inv_dir = 1. / rd;
@@ -40,17 +38,20 @@ vec3 cast_ray() {
 
     vec3 dir_values = start_values;
 
-    int m_index = min_index(dir_values * octand11);
-    for (int i = 0; i < 20; i++) {
+    int m_index = 0;
+    for (int i = 0; i < 50; i++) {
         m_index = min_index(dir_values * octand11);
         dir_values[m_index] += inv_dir[m_index];
 
+        vec3 impact_point = ro + (((dir_values - start_values) * octand11)[m_index] - 0.001) * rd;
+        if(length(floor(impact_point)) > 10.5)
+            return colors[m_index];
     }
-    return colors[m_index];
+    return vec3(0.);
 }
 
 void main() {
 
     vec4 to_write = vec4(cast_ray(), 1.);
-    imageStore(img, ivec2(gl_GlobalInvocationID.xy), to_write);
+    imageStore(img, ivec2(gl_GlobalInvocationID.x, imageSize(img).y - gl_GlobalInvocationID.y), to_write);
 }

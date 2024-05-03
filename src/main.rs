@@ -23,9 +23,13 @@ fn main() {
         
         match event {
             Event::DeviceEvent { event, .. } => match event {
+                DeviceEvent::Key(input) => {
+                    if input.virtual_keycode.unwrap() == VirtualKeyCode::Escape && input.state == ElementState::Pressed {control_flow.set_exit()};
+                    input_helper.update(input);
+                }
                 DeviceEvent::MouseMotion { delta } => {
                     player_view_direction.0 -= (delta.0 as f32 * 0.005) % std::f32::consts::PI;
-                    player_view_direction.1 = (player_view_direction.1 + delta.1 as f32 * 0.005)
+                    player_view_direction.1 = (player_view_direction.1 - delta.1 as f32 * 0.005)
                         .max(-1.4)
                         .min(1.4);
                 }
@@ -38,23 +42,12 @@ fn main() {
                 *control_flow = ControlFlow::Exit;
             }
             Event::WindowEvent {
-                event: WindowEvent::KeyboardInput { input, .. },
-                ..
-            } => {
-                if (input.virtual_keycode.unwrap() == VirtualKeyCode::Escape
-                    && input.state == ElementState::Pressed)
-                {
-                    *control_flow = ControlFlow::Exit;
-                }
-                input_helper.update(input);
-            }
-            Event::WindowEvent {
                 event: WindowEvent::Resized(_),
                 ..
             } => {
                 graphics_handler.recreate_swapchain = true;
             }
-            Event::RedrawEventsCleared => {
+            Event::MainEventsCleared => {
                 let delta_time = SystemTime::now()
                     .duration_since(last_frame_time)
                     .unwrap()
@@ -63,8 +56,6 @@ fn main() {
                 player.update_player(&input_helper, player_view_direction, delta_time);
 
                 
-                let mut submit_player = Player::new();
-                submit_player.transformation_matrix = player.transformation_matrix;
                 graphics_handler.redraw(player);
             }
             _ => {}

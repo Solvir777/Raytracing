@@ -1,3 +1,4 @@
+use winit::window::WindowBuilder;
 use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -25,7 +26,7 @@ use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, Standar
 use vulkano::shader::ShaderStages;
 use vulkano::sync::GpuFuture;
 use winit::event_loop::EventLoop;
-use winit::window::{CursorGrabMode, Fullscreen, Window, WindowBuilder};
+use winit::window::{CursorGrabMode, Fullscreen, Window};
 use crate::player::Player;
 
 mod cs {
@@ -81,12 +82,11 @@ impl GraphicsHandler{
 		
 		let window = Arc::new(
 			WindowBuilder::new()
-				.with_inner_size(winit::dpi::PhysicalSize::new(1024, 1024))
+				.with_inner_size(winit::dpi::LogicalSize::new(800, 600))
 				.build(&event_loop)
 				.unwrap(),
 		);
-		window.set_cursor_visible(false);
-		window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+		
 		let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 		let device_extensions = DeviceExtensions {
 			khr_swapchain: true,
