@@ -1,9 +1,9 @@
-use bytemuck::{Pod, Zeroable};
 use nalgebra::{Matrix4, Vector3};
+use vulkano::buffer::BufferContents;
 use crate::input_helper::InputHelper;
 
 #[repr(C)]
-#[derive(Pod, Copy, Clone, Zeroable)]
+#[derive(Copy, Clone, BufferContents)]
 pub struct Player {
 	pub transformation_matrix: Matrix4<f32>,
 }
@@ -11,7 +11,7 @@ impl Player {
 	const SPEED: f32 = 5.;
 	pub fn new() -> Self{
 		Self{
-			transformation_matrix: Matrix4::<f32>::identity().append_translation(&Vector3::<f32>::new(0., 5., 0.)),
+			transformation_matrix: Matrix4::<f32>::identity().append_translation(&Vector3::<f32>::new(-5., 5., -5.)),
 		}
 	}
 	

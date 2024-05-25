@@ -1,33 +1,54 @@
-use winit::window::WindowBuilder;
-use std::collections::BTreeMap;
-use std::mem::size_of;
-use std::sync::Arc;
-use bytemuck::{Pod, Zeroable};
-use nalgebra::Matrix4;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
-
-use vulkano::device::{
-	Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
+use std::{
+	sync::Arc
 };
-use vulkano::image::{Image, ImageUsage};
-use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
-use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
-use vulkano::pipeline::compute::ComputePipelineCreateInfo;
-use vulkano::pipeline::layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo, PushConstantRange};
-use vulkano::swapchain::{acquire_next_image, ColorSpace, Surface, Swapchain, SwapchainCreateFlags, SwapchainCreateInfo, SwapchainPresentInfo};
-use vulkano::{sync, Validated, VulkanError};
-use vulkano::buffer::{Buffer, BufferCreateFlags, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
-use vulkano::descriptor_set::layout::{DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateFlags, DescriptorSetLayoutCreateInfo, DescriptorType};
-use vulkano::image::view::{ImageView, ImageViewCreateInfo};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
-use vulkano::shader::ShaderStages;
-use vulkano::sync::GpuFuture;
-use winit::event_loop::EventLoop;
-use winit::window::{CursorGrabMode, Fullscreen, Window};
+
+use vulkano::{
+	sync,
+	Validated,
+	command_buffer::{
+		AutoCommandBufferBuilder,
+		CommandBufferUsage,
+		allocator::StandardCommandBufferAllocator
+	},
+	descriptor_set::{
+		PersistentDescriptorSet,
+		WriteDescriptorSet,
+		allocator::StandardDescriptorSetAllocator,
+		layout::{DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateFlags, DescriptorSetLayoutCreateInfo, DescriptorType}
+	},
+	device::{
+		Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
+	},
+	image::{
+		Image,
+		ImageUsage,
+		view::{ImageView, ImageViewCreateInfo}
+	},
+	instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
+	memory::allocator::StandardMemoryAllocator,
+	pipeline::{
+		ComputePipeline,
+		Pipeline,
+		PipelineBindPoint,
+		PipelineLayout,
+		PipelineShaderStageCreateInfo,
+		compute::ComputePipelineCreateInfo,
+		layout::{PipelineLayoutCreateInfo, PushConstantRange}
+	},
+	shader::ShaderStages,
+	swapchain::{acquire_next_image, ColorSpace, Surface, Swapchain, SwapchainCreateFlags, SwapchainCreateInfo, SwapchainPresentInfo},
+	sync::GpuFuture,
+	buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
+	memory::allocator::{AllocationCreateInfo, MemoryTypeFilter}
+};
+use winit::{
+	event_loop::EventLoop,
+	window::Window,
+	window::WindowBuilder
+};
+
 use crate::player::Player;
+use crate::terrain_tree::TerrainTree;
 
 mod cs {
 	vulkano_shaders::shader! {
@@ -44,14 +65,15 @@ pub struct GraphicsHandler{
 	images: Vec<Arc<Image>>,
 	compute_pipeline: Arc<ComputePipeline>,
 	descriptor_set_allocator: StandardDescriptorSetAllocator,
-	pub(crate) recreate_swapchain: bool,
+	recreate_swapchain: bool,
 	memory_allocator: Arc<StandardMemoryAllocator>,
-	descriptor_sets: Vec<Arc<PersistentDescriptorSet>>,
+	terrain_buffer: Subbuffer<[u32]>,
+	previous_frame_end: Option<Box<dyn GpuFuture>>,
 }
 
 
 impl GraphicsHandler{
-	pub fn setup() -> (GraphicsHandler, EventLoop<()>) {
+	pub fn setup(terrain: TerrainTree) -> (GraphicsHandler, EventLoop<()>) {
 		let event_loop = EventLoop::new();
 		let required_extensions = vulkano::instance::InstanceExtensions {
 			..Surface::required_extensions(&event_loop)
@@ -91,6 +113,7 @@ impl GraphicsHandler{
 		let device_extensions = DeviceExtensions {
 			khr_swapchain: true,
 			khr_swapchain_mutable_format: true,
+			khr_storage_buffer_storage_class: true,
 			..DeviceExtensions::default()
 		};
 		
@@ -109,7 +132,7 @@ impl GraphicsHandler{
 		
 		let queue = queues.next().unwrap();
 		
-		let (mut swapchain, mut images) = {
+		let (swapchain, images) = {
 			let image_format = device
 				.physical_device()
 				.surface_formats(&surface, Default::default())
@@ -151,16 +174,16 @@ impl GraphicsHandler{
 			..PipelineShaderStageCreateInfo::new(cs)
 		};
 		
-		let bindings: BTreeMap<u32, DescriptorSetLayoutBinding> = {
-			let mut bindings = BTreeMap::default();
+		let bindings: std::collections::BTreeMap<u32, DescriptorSetLayoutBinding> = {
+			let mut bindings = std::collections::BTreeMap::default();
 			bindings.insert(0, DescriptorSetLayoutBinding {
 				stages: ShaderStages::COMPUTE,
 				..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageImage)
-			});/*
+			});
 			bindings.insert(1, DescriptorSetLayoutBinding {
 				stages: ShaderStages::COMPUTE,
-				..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::Pu)
-			});*/
+				..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageBuffer)
+			});
 			bindings
 		};
 		
@@ -191,7 +214,7 @@ impl GraphicsHandler{
 		)
 			.unwrap();
 		
-		let mut compute_pipeline = ComputePipeline::new(
+		let compute_pipeline = ComputePipeline::new(
 			device.clone(),
 			None,
 			ComputePipelineCreateInfo {
@@ -205,22 +228,44 @@ impl GraphicsHandler{
 		let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
 		
 		
+		let terrain_data = terrain.get_gpu_data();
+		println!("full_gpu: {:?}", terrain_data);
 		
-		(Self{
-			window,
-			device,
-			queue,
-			swapchain,
-			images,
-			compute_pipeline,
-			descriptor_set_allocator,
-			descriptor_sets: vec!(),
-			recreate_swapchain: true,
-			memory_allocator,
-		}, event_loop)
+		let terrain_buffer: Subbuffer<[u32]> = Buffer::from_iter(
+			memory_allocator.clone(),
+			BufferCreateInfo{
+				usage: BufferUsage::STORAGE_BUFFER,
+				..Default::default()
+			},
+			AllocationCreateInfo{
+				memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+				..Default::default()
+			},
+			terrain_data.iter().cloned()
+		).unwrap();
+		
+		let previous_frame_end = Some(sync::now(device.clone()).boxed());
+		
+		(
+			Self{
+				previous_frame_end,
+				window,
+				device,
+				queue,
+				swapchain,
+				images,
+				compute_pipeline,
+				descriptor_set_allocator,
+				recreate_swapchain: true,
+				memory_allocator,
+				terrain_buffer
+			},
+			event_loop
+		)
 	}
 	
 	pub fn redraw(&mut self, push_constant_data: Player){
+		
 		if self.recreate_swapchain {
 			(self.swapchain, self.images) = self.swapchain
 				.recreate(SwapchainCreateInfo {
@@ -228,18 +273,14 @@ impl GraphicsHandler{
 					..self.swapchain.create_info()
 				})
 				.expect("Failed to recreate Swapchain");
-			
-			self.create_command_buffers();
-			
+				
 			self.recreate_swapchain = false;
 		}
+		
 		
 		let (image_index, suboptimal, acquire_future) =
 			match acquire_next_image(self.swapchain.clone(), None).map_err(Validated::unwrap) {
 				Ok(r) => r,
-				Err(VulkanError::OutOfDate) => {
-					panic!();
-				}
 				Err(e) => panic!("failed to acquire next image: {}", e),
 			};
 		
@@ -259,6 +300,23 @@ impl GraphicsHandler{
 				CommandBufferUsage::MultipleSubmit,
 			).unwrap();
 			
+			
+			let img = &self.images[image_index as usize];
+			
+			let swapchain_image_view =
+				ImageView::new(img.clone(), ImageViewCreateInfo::from_image(&*img)).unwrap();
+			
+			let set = PersistentDescriptorSet::new(
+				&self.descriptor_set_allocator,
+				self.compute_pipeline.layout().set_layouts()[0].clone(),
+				[
+					WriteDescriptorSet::image_view(0, swapchain_image_view),
+					WriteDescriptorSet::buffer(1, self.terrain_buffer.clone()),
+				],
+				[],
+			)
+				.unwrap();
+			
 			builder
 				.bind_pipeline_compute(self.compute_pipeline.clone())
 				.unwrap()
@@ -268,7 +326,7 @@ impl GraphicsHandler{
 					PipelineBindPoint::Compute,
 					self.compute_pipeline.layout().clone(),
 					0,
-					self.descriptor_sets[image_index as usize].clone(),
+					set.clone(),
 				)
 				.unwrap()
 				.dispatch([
@@ -292,32 +350,16 @@ impl GraphicsHandler{
 			.then_signal_fence_and_flush()
 			.unwrap();
 		
+		
+		
+		
+		
+		
 		future.wait(None).unwrap();
+		
+		
 	}
-	
-	
-	
-	fn create_command_buffers( &mut self ){
-		let mut sets = vec![];
-		let layout = self.compute_pipeline.layout().set_layouts().get(0).unwrap();
-		
-		for img in &self.images {
-			let image_view =
-				ImageView::new(img.clone(), ImageViewCreateInfo::from_image(&*img)).unwrap();
-			
-			
-			let set = PersistentDescriptorSet::new(
-				&self.descriptor_set_allocator,
-				layout.clone(),
-				[
-					WriteDescriptorSet::image_view(0, image_view),
-				],
-				[],
-			)
-				.unwrap();
-			sets.push(set);
-		}
-		
-		self.descriptor_sets = sets;
+	pub fn recreate_swapchain(&mut self) {
+		self.recreate_swapchain = true;
 	}
 }
