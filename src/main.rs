@@ -14,7 +14,7 @@ mod time_utility;
 mod terrain_tree;
 
 fn main() {
-    let terrain_tree = TerrainTree::new_by_function(1);
+    let terrain_tree = TerrainTree::new_by_function(2);
     let mut timer = time_utility::Timer::new(true, true, true, 0.8);
     let mut player_view_direction = (-std::f32::consts::PI / 4., -std::f32::consts::PI / 6.);
     let mut input_helper = InputHelper::new();

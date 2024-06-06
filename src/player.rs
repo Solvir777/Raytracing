@@ -8,7 +8,7 @@ pub struct Player {
 	pub transformation_matrix: Matrix4<f32>,
 }
 impl Player {
-	const SPEED: f32 = 5.;
+	const SPEED: f32 = 20.;
 	pub fn new() -> Self{
 		Self{
 			transformation_matrix: Matrix4::<f32>::identity().append_translation(&Vector3::<f32>::new(-5., 5., -5.)),
@@ -48,8 +48,5 @@ impl Player {
 		
 		self.transformation_matrix = create_rotation_mat((view_direction.1, view_direction.0))
 			.append_translation(&(&(self.transformation_matrix.column(3).xyz()) + movement));
-		
-		//println!("player position: {}", self.transformation_matrix);
-		//println!("but could also be: {:?}", (self.transformation_matrix.m41, self.transformation_matrix.m42, self.transformation_matrix.m43));
 	}
 }

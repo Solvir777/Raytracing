@@ -18,12 +18,11 @@ impl TerrainTree {
 			self.pos.z as u32,
 		);
 		
-		let root_node_data = self.root.get_gpu_data();
+		let root_node_data = self.root.get_gpu_data(4);
 		println!("root node data: \n{:?}", root_node_data);
 		data.extend(root_node_data);
 		data
 	}
-	
 	pub fn new_empty_origin() -> TerrainTree {
 		Self{
 			size: 0,
