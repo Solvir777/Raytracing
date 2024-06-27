@@ -38,9 +38,13 @@ use vulkano::{
 	shader::ShaderStages,
 	swapchain::{acquire_next_image, ColorSpace, Surface, Swapchain, SwapchainCreateFlags, SwapchainCreateInfo, SwapchainPresentInfo},
 	sync::GpuFuture,
-	buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
 	memory::allocator::{AllocationCreateInfo, MemoryTypeFilter}
 };
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
+use vulkano::format::Format;
+use vulkano::image::{ImageAspects, ImageCreateInfo};
+use vulkano::image::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode};
+use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use winit::{
 	event_loop::EventLoop,
 	window::Window,
@@ -48,14 +52,22 @@ use winit::{
 };
 
 use crate::player::Player;
-use crate::terrain_tree::TerrainTree;
 
-mod cs {
+mod rendering_cs {
 	vulkano_shaders::shader! {
         ty: "compute",
-        path: r"cs.glsl",
+        path: r"src/shaders/raytracer.glsl",
     }
 }
+
+mod df_cs {
+	vulkano_shaders::shader! {
+        ty: "compute",
+        path: r"src/shaders/d_field_generator.glsl",
+    }
+}
+
+
 
 pub struct GraphicsHandler{
 	window: Arc<Window>,
@@ -63,17 +75,18 @@ pub struct GraphicsHandler{
 	queue: Arc<Queue>,
 	swapchain: Arc<Swapchain>,
 	images: Vec<Arc<Image>>,
-	compute_pipeline: Arc<ComputePipeline>,
+	render_pipeline: Arc<ComputePipeline>,
+	distance_field_pipeline: Arc<ComputePipeline>,
 	descriptor_set_allocator: StandardDescriptorSetAllocator,
 	recreate_swapchain: bool,
 	memory_allocator: Arc<StandardMemoryAllocator>,
-	terrain_buffer: Subbuffer<[u32]>,
 	previous_frame_end: Option<Box<dyn GpuFuture>>,
+	distance_field_image_view: Arc<ImageView>,
 }
 
 
 impl GraphicsHandler{
-	pub fn setup(terrain: TerrainTree) -> (GraphicsHandler, EventLoop<()>) {
+	pub fn setup(img_size: (u32, u32)) -> (GraphicsHandler, EventLoop<()>) {
 		let event_loop = EventLoop::new();
 		let required_extensions = vulkano::instance::InstanceExtensions {
 			..Surface::required_extensions(&event_loop)
@@ -104,7 +117,7 @@ impl GraphicsHandler{
 		
 		let window = Arc::new(
 			WindowBuilder::new()
-				.with_inner_size(winit::dpi::LogicalSize::new(800, 600))
+				.with_inner_size(winit::dpi::LogicalSize::new(img_size.0, img_size.1))
 				.build(&event_loop)
 				.unwrap(),
 		);
@@ -167,14 +180,14 @@ impl GraphicsHandler{
 				.unwrap()
 		};
 		
-		let compute_shader = cs::load(device.clone()).expect("failed to create shader module");
+		let rendering_compute_shader = rendering_cs::load(device.clone()).expect("failed to create shader module");
 		
-		let cs = compute_shader.entry_point("main").unwrap();
-		let stage = PipelineShaderStageCreateInfo {
-			..PipelineShaderStageCreateInfo::new(cs)
+		let render_cs = rendering_compute_shader.entry_point("main").unwrap();
+		let render_stage = PipelineShaderStageCreateInfo {
+			..PipelineShaderStageCreateInfo::new(render_cs)
 		};
 		
-		let bindings: std::collections::BTreeMap<u32, DescriptorSetLayoutBinding> = {
+		let render_pipeline_descriptor_bindings: std::collections::BTreeMap<u32, DescriptorSetLayoutBinding> = {
 			let mut bindings = std::collections::BTreeMap::default();
 			bindings.insert(0, DescriptorSetLayoutBinding {
 				stages: ShaderStages::COMPUTE,
@@ -182,14 +195,52 @@ impl GraphicsHandler{
 			});
 			bindings.insert(1, DescriptorSetLayoutBinding {
 				stages: ShaderStages::COMPUTE,
-				..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageBuffer)
+				..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageImage)
 			});
 			bindings
 		};
 		
+		let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
 		
 		
-		let pipeline_layout = PipelineLayout::new(
+		
+		
+		
+		let distance_field_image_view = {
+			let image = Image::new(
+				memory_allocator.clone(),
+				ImageCreateInfo {
+					image_type: vulkano::image::ImageType::Dim3d,
+					format: Format::R32_UINT,
+					extent: [16, 16, 16],
+					samples: vulkano::image::SampleCount::Sample1,
+					tiling: vulkano::image::ImageTiling::Optimal,
+					usage: ImageUsage::STORAGE,
+					..Default::default()
+				},
+				AllocationCreateInfo {
+					memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+					..Default::default()
+				}
+			).unwrap();
+			
+			ImageView::new(
+				image.clone(),
+				ImageViewCreateInfo {
+					view_type: vulkano::image::view::ImageViewType::Dim3d,
+					format: Format::R32_UINT,
+					subresource_range: vulkano::image::ImageSubresourceRange {
+						aspects: ImageAspects::COLOR,
+						mip_levels: 0..1,
+						array_layers: 0..1,
+					},
+					usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
+					..Default::default()
+				}
+			).unwrap()
+		};
+		
+		let render_pipeline_layout = PipelineLayout::new(
 			device.clone(),
 			PipelineLayoutCreateInfo{
 				set_layouts: vec![
@@ -197,7 +248,7 @@ impl GraphicsHandler{
 						device.clone(),
 						DescriptorSetLayoutCreateInfo{
 							flags: DescriptorSetLayoutCreateFlags::empty(),
-							bindings,
+							bindings: render_pipeline_descriptor_bindings,
 							..Default::default()
 						}
 					).expect("Failed to create DescriptorSetLayout")
@@ -214,51 +265,55 @@ impl GraphicsHandler{
 		)
 			.unwrap();
 		
-		let compute_pipeline = ComputePipeline::new(
+		let render_pipeline = ComputePipeline::new(
 			device.clone(),
 			None,
-			ComputePipelineCreateInfo {
-				..ComputePipelineCreateInfo::stage_layout(stage, pipeline_layout)
-			},
+			ComputePipelineCreateInfo::stage_layout(render_stage, render_pipeline_layout),
 		)
-			.expect("failed to create compute pipeline");
+			.expect("failed to create rendering pipeline");
+		
+		
+		
+		
+		
+		let df_compute_shader = df_cs::load(device.clone()).unwrap();
+		
+		let df_cs = df_compute_shader.entry_point("main").unwrap();
+		
+		let df_stage = PipelineShaderStageCreateInfo::new(df_cs);
+		
+		let df_pipeline_layout = PipelineLayout::new(
+			device.clone(),
+			PipelineDescriptorSetLayoutCreateInfo::from_stages([&df_stage])
+				.into_pipeline_layout_create_info(device.clone()).unwrap(),
+		).unwrap();
+		
+		let df_pipeline = ComputePipeline::new(
+			device.clone(),
+			None,
+			ComputePipelineCreateInfo::stage_layout(df_stage, df_pipeline_layout),
+		).expect("failed to create distance field pipeline");
+		
 		
 		let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone(), Default::default());
 		
-		let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
-		
-		
-		let terrain_data = terrain.get_gpu_data();
-		println!("full_gpu: {:?}", terrain_data);
-		
-		let terrain_buffer: Subbuffer<[u32]> = Buffer::from_iter(
-			memory_allocator.clone(),
-			BufferCreateInfo{
-				usage: BufferUsage::STORAGE_BUFFER,
-				..Default::default()
-			},
-			AllocationCreateInfo{
-				memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-				..Default::default()
-			},
-			terrain_data.iter().cloned()
-		).unwrap();
 		
 		let previous_frame_end = Some(sync::now(device.clone()).boxed());
 		
 		(
 			Self{
+				distance_field_image_view,
 				previous_frame_end,
 				window,
 				device,
 				queue,
 				swapchain,
 				images,
-				compute_pipeline,
+				render_pipeline,
+				distance_field_pipeline: df_pipeline,
 				descriptor_set_allocator,
 				recreate_swapchain: true,
 				memory_allocator,
-				terrain_buffer
 			},
 			event_loop
 		)
@@ -290,41 +345,42 @@ impl GraphicsHandler{
 		
 		let command_buffer = {
 			let command_buffer_allocator = StandardCommandBufferAllocator::new(
-				self.compute_pipeline.device().clone(),
+				self.render_pipeline.device().clone(),
 				Default::default(),
 			);
 			
 			let mut builder = AutoCommandBufferBuilder::primary(
 				&command_buffer_allocator,
 				self.queue.queue_family_index(),
-				CommandBufferUsage::MultipleSubmit,
+				CommandBufferUsage::OneTimeSubmit,
 			).unwrap();
 			
 			
-			let img = &self.images[image_index as usize];
+			let render_target = &self.images[image_index as usize];
 			
 			let swapchain_image_view =
-				ImageView::new(img.clone(), ImageViewCreateInfo::from_image(&*img)).unwrap();
+				ImageView::new(render_target.clone(), ImageViewCreateInfo::from_image(&*render_target)).unwrap();
+			
 			
 			let set = PersistentDescriptorSet::new(
 				&self.descriptor_set_allocator,
-				self.compute_pipeline.layout().set_layouts()[0].clone(),
+				self.render_pipeline.layout().set_layouts()[0].clone(),
 				[
 					WriteDescriptorSet::image_view(0, swapchain_image_view),
-					WriteDescriptorSet::buffer(1, self.terrain_buffer.clone()),
+					WriteDescriptorSet::image_view(1, self.distance_field_image_view.clone()),
 				],
 				[],
 			)
 				.unwrap();
 			
 			builder
-				.bind_pipeline_compute(self.compute_pipeline.clone())
+				.bind_pipeline_compute(self.render_pipeline.clone())
 				.unwrap()
-				.push_constants(self.compute_pipeline.layout().clone(), 0, push_constant_data)
+				.push_constants(self.render_pipeline.layout().clone(), 0, push_constant_data)
 				.unwrap()
 				.bind_descriptor_sets(
 					PipelineBindPoint::Compute,
-					self.compute_pipeline.layout().clone(),
+					self.render_pipeline.layout().clone(),
 					0,
 					set.clone(),
 				)
@@ -361,5 +417,74 @@ impl GraphicsHandler{
 	}
 	pub fn recreate_swapchain(&mut self) {
 		self.recreate_swapchain = true;
+	}
+	
+	pub fn recreate_distance_field(&mut self, new_terrain: [u32; 16 * 16 * 16]) {
+		
+		let command_buffer = {
+			let command_buffer_allocator = StandardCommandBufferAllocator::new(
+				self.distance_field_pipeline.device().clone(),
+				Default::default(),
+			);
+			
+			let mut builder = AutoCommandBufferBuilder::primary(
+				&command_buffer_allocator,
+				self.queue.queue_family_index(),
+				CommandBufferUsage::OneTimeSubmit,
+			).unwrap();
+			
+			let terrain_buffer= Buffer::from_data(
+				self.memory_allocator.clone(),
+				BufferCreateInfo{
+					usage: BufferUsage::TRANSFER_DST | BufferUsage::UNIFORM_BUFFER,
+					..Default::default()
+				},
+				AllocationCreateInfo{
+					memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS | MemoryTypeFilter::PREFER_DEVICE,
+					..Default::default()
+				},
+				new_terrain
+			).unwrap();
+			
+			let set = PersistentDescriptorSet::new(
+				&self.descriptor_set_allocator,
+				self.distance_field_pipeline.layout().set_layouts()[0].clone(),
+				[
+					WriteDescriptorSet::buffer(0, terrain_buffer),
+					WriteDescriptorSet::image_view(1, self.distance_field_image_view.clone()),
+				],
+				[],
+			)
+				.unwrap();
+			
+			
+			builder
+				.bind_pipeline_compute(self.distance_field_pipeline.clone())
+				.unwrap()
+				.bind_descriptor_sets(
+					PipelineBindPoint::Compute,
+					self.distance_field_pipeline.layout().clone(),
+					0,
+					set.clone(),
+				)
+				.unwrap()
+				.dispatch([
+					16,
+					16,
+					16,
+				])
+				.unwrap();
+			
+			builder.build().unwrap()
+		};
+		
+		let future = sync::now(self.device.clone())
+			.then_execute(self.queue.clone(), command_buffer.clone())
+			.unwrap()
+			.then_signal_fence_and_flush()
+			.unwrap();
+		
+		future.wait(None).unwrap();
+		println!("recreated terrain");
 	}
 }

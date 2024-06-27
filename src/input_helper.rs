@@ -13,8 +13,26 @@ impl InputHelper {
 	}
 	pub fn update(&mut self, input: KeyboardInput) {
 		match input.state {
-			ElementState::Pressed => {self.pressed_keys.insert(input.virtual_keycode.unwrap());}
-			ElementState::Released => {self.pressed_keys.remove(&input.virtual_keycode.unwrap());}
+			ElementState::Pressed => {
+				match input.virtual_keycode {
+					Some(keycode) => {
+						self.pressed_keys.insert(keycode);
+					},
+					None => {
+						println!("unknown keypress!");
+					}
+				}
+			}
+			ElementState::Released => {
+				match input.virtual_keycode {
+					Some(keycode) => {
+						self.pressed_keys.remove(&keycode);
+					},
+					None => {
+						println!("unknown key released!");
+					}
+				}
+			}
 		}
 	}
 	
@@ -35,5 +53,11 @@ impl InputHelper {
 	
 	pub fn time_key_pressed(&self) -> bool {
 		self.pressed_keys.contains(&VirtualKeyCode::T)
+	}
+	pub fn exit_key_pressed(&self) -> bool {
+		self.pressed_keys.contains(&VirtualKeyCode::Escape)
+	}
+	pub fn position_key_pressed(&self) -> bool {
+		self.pressed_keys.contains(&VirtualKeyCode::P)
 	}
 }

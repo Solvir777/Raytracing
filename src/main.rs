@@ -2,7 +2,7 @@ use crate::graphics_handler::GraphicsHandler;
 use crate::input_helper::InputHelper;
 use crate::player::Player;
 use std::time::SystemTime;
-use winit::event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent};
+use winit::event::{DeviceEvent, Event, WindowEvent};
 use winit::event_loop::ControlFlow;
 use crate::terrain_tree::TerrainTree;
 
@@ -12,15 +12,21 @@ mod player;
 mod player_settings;
 mod time_utility;
 mod terrain_tree;
+const WINDOW_DIMENSIONS: (u32, u32) = (800, 600);
 
 fn main() {
-    let terrain_tree = TerrainTree::new_by_function(2);
+    //let terrain_tree = TerrainTree::new_by_function(2);
     let mut timer = time_utility::Timer::new(true, true, true, 0.8);
     let mut player_view_direction = (-std::f32::consts::PI / 4., -std::f32::consts::PI / 6.);
     let mut input_helper = InputHelper::new();
     let mut last_frame_time = SystemTime::now();
     let mut player = Player::new();
-    let (mut graphics_handler, event_loop) = GraphicsHandler::setup(terrain_tree);
+    let (mut graphics_handler, event_loop) = GraphicsHandler::setup(WINDOW_DIMENSIONS);
+    
+    let terrain = [0; 4096];
+    
+    
+    graphics_handler.recreate_distance_field(terrain);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
@@ -28,8 +34,10 @@ fn main() {
         match event {
             Event::DeviceEvent { event, .. } => match event {
                 DeviceEvent::Key(input) => {
-                    if input.virtual_keycode.unwrap() == VirtualKeyCode::Escape && input.state == ElementState::Pressed {control_flow.set_exit()};
                     input_helper.update(input);
+                    if input_helper.exit_key_pressed() {
+                        control_flow.set_exit();
+                    }
                 }
                 DeviceEvent::MouseMotion { delta } => {
                     player_view_direction.0 -= (delta.0 as f32 * 0.005) % std::f32::consts::PI;
@@ -60,6 +68,7 @@ fn main() {
                 player.update_player(&input_helper, player_view_direction, delta_time);
 
                 timer.print_status(input_helper.time_key_pressed());
+                if input_helper.position_key_pressed() {player.debug()}
                 graphics_handler.redraw(player);
             }
             _ => {}
