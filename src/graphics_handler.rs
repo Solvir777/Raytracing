@@ -1,7 +1,11 @@
+use std::time::SystemTime;
+use vulkano::command_buffer::ClearColorImageInfo;
 use std::{
 	sync::Arc
 };
-
+use std::any::Any;
+use nalgebra::Vector3;
+use opensimplex_noise_rs::OpenSimplexNoise;
 use vulkano::{
 	sync,
 	Validated,
@@ -41,7 +45,7 @@ use vulkano::{
 	memory::allocator::{AllocationCreateInfo, MemoryTypeFilter}
 };
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
-use vulkano::format::Format;
+use vulkano::format::{ClearColorValue, Format};
 use vulkano::image::{ImageAspects, ImageCreateInfo};
 use vulkano::image::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode};
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
@@ -215,7 +219,7 @@ impl GraphicsHandler{
 					extent: [16, 16, 16],
 					samples: vulkano::image::SampleCount::Sample1,
 					tiling: vulkano::image::ImageTiling::Optimal,
-					usage: ImageUsage::STORAGE,
+					usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_DST,
 					..Default::default()
 				},
 				AllocationCreateInfo {
@@ -406,14 +410,7 @@ impl GraphicsHandler{
 			.then_signal_fence_and_flush()
 			.unwrap();
 		
-		
-		
-		
-		
-		
 		future.wait(None).unwrap();
-		
-		
 	}
 	pub fn recreate_swapchain(&mut self) {
 		self.recreate_swapchain = true;
@@ -433,17 +430,20 @@ impl GraphicsHandler{
 				CommandBufferUsage::OneTimeSubmit,
 			).unwrap();
 			
-			let terrain_buffer= Buffer::from_data(
+			
+			let aew_terrain = world_function(Vector3::<i32>::new(0, 0, 0));
+			
+			let terrain_buffer = Buffer::from_data(
 				self.memory_allocator.clone(),
 				BufferCreateInfo{
-					usage: BufferUsage::TRANSFER_DST | BufferUsage::UNIFORM_BUFFER,
+					usage: BufferUsage::STORAGE_BUFFER,
 					..Default::default()
 				},
 				AllocationCreateInfo{
 					memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS | MemoryTypeFilter::PREFER_DEVICE,
 					..Default::default()
 				},
-				new_terrain
+				aew_terrain
 			).unwrap();
 			
 			let set = PersistentDescriptorSet::new(
@@ -459,6 +459,12 @@ impl GraphicsHandler{
 			
 			
 			builder
+				.clear_color_image(
+					ClearColorImageInfo{
+						clear_value: ClearColorValue::Uint([16; 4]),
+						..ClearColorImageInfo::image(self.distance_field_image_view.image().clone())
+					}
+				).unwrap()
 				.bind_pipeline_compute(self.distance_field_pipeline.clone())
 				.unwrap()
 				.bind_descriptor_sets(
@@ -469,15 +475,15 @@ impl GraphicsHandler{
 				)
 				.unwrap()
 				.dispatch([
-					16,
-					16,
-					16,
+					4,
+					4,
+					4,
 				])
 				.unwrap();
 			
 			builder.build().unwrap()
 		};
-		
+		let timer = SystemTime::now();
 		let future = sync::now(self.device.clone())
 			.then_execute(self.queue.clone(), command_buffer.clone())
 			.unwrap()
@@ -485,6 +491,22 @@ impl GraphicsHandler{
 			.unwrap();
 		
 		future.wait(None).unwrap();
-		println!("recreated terrain");
+		println!("recreated terrain (took {} ms)!", SystemTime::now().duration_since(timer).unwrap().as_millis());
 	}
+}
+
+fn world_function(pos: Vector3<i32>) -> [u32; 4096] {
+	const SCALE: f64 = 0.05;
+	let noise_gen: OpenSimplexNoise = OpenSimplexNoise::new(Some(883_279_212_983_182_319));
+	let mut terrain_data = [0u32; 4096];
+	for x in 0..16 {
+		for y in 0..16 {
+			for z in 0..16 {
+				let noise_pos = Vector3::<f64>::new((pos.x + x as i32) as f64, (pos.y + y as i32) as f64, (pos.z + z as i32) as f64) * SCALE;
+				
+				terrain_data[x * 16 * 16 + y * 16 + z] = (noise_gen.eval_3d(noise_pos.x, noise_pos.y, noise_pos.z) < 0.) as u32;
+			}
+		}
+	}
+	terrain_data
 }

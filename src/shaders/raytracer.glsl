@@ -76,19 +76,13 @@ vec3 cast_ray() {
     float overall_distance_along_ray = aabb.x;
     uint intersection_index = uint(aabb.z);
 
-
-    for (int i = 0; i < 100; i++) {
+    int i = 0;//todo
+    for (i = 0; i < 100 && overall_distance_along_ray < aabb.y; i++) {
 
 
         ivec3 p = ivec3(ro + overall_distance_along_ray * rd);
 
         p[intersection_index] = int(round(ro + overall_distance_along_ray * rd)[intersection_index]) - 1 + VMASK[intersection_index];
-
-        if(!in_bounds(p)) {
-            return vec3(0., 0., 0.5);
-        }
-
-
 
         uint d = imageLoad(distance_field, p).x;
         if(d == 0) {
@@ -104,7 +98,7 @@ vec3 cast_ray() {
 
 
 
-    return vec3(0.2);
+    return vec3(1.) / i;
 }
 
 void main() {

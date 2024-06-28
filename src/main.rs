@@ -23,7 +23,7 @@ fn main() {
     let mut player = Player::new();
     let (mut graphics_handler, event_loop) = GraphicsHandler::setup(WINDOW_DIMENSIONS);
     
-    let terrain = [0; 4096];
+    let mut terrain = [0u32; 4096];
     
     
     graphics_handler.recreate_distance_field(terrain);
