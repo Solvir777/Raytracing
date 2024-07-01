@@ -93,7 +93,7 @@ vec3 cast_ray() {
         vec3 f_point = ro + overall_distance_along_ray * rd;
         ivec3 p = ivec3(f_point);
 
-        p[intersection_index] = int(round(ro + overall_distance_along_ray * rd)[intersection_index]) - 1 + VMASK[intersection_index];
+        p[intersection_index] = int(round(f_point)[intersection_index]) - 1 + VMASK[intersection_index];
 
         uint d = imageLoad(distance_field[0], p).x;
         if(2147483648 < d) {

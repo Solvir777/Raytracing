@@ -5,24 +5,26 @@ use std::time::SystemTime;
 use nalgebra::{Vector3, Vector4};
 use winit::event::{DeviceEvent, Event, WindowEvent};
 use winit::event_loop::ControlFlow;
+use crate::terrain::Terrain;
 
 mod graphics_handler;
 mod input_helper;
 mod player;
 mod player_settings;
 mod time_utility;
-mod terrain_tree;
+mod terrain;
+
 const WINDOW_DIMENSIONS: (u32, u32) = (800, 600);
 
 fn main() {
-    //let terrain_tree = TerrainTree::new_by_function(2);
-    let mut terrain_pos = Vector3::new(0, 0, 0);
+    let mut terrain = Terrain::new();
+    
     let mut timer = time_utility::Timer::new(true, true, true, 0.8);
     let mut player_view_direction = (-std::f32::consts::PI / 4., -0.2);
     let mut input_helper = InputHelper::new();
     let mut last_frame_time = SystemTime::now();
     let mut player = Player::new();
-    let (mut graphics_handler, event_loop) = GraphicsHandler::initialize(WINDOW_DIMENSIONS);
+    let (mut graphics_handler, event_loop) = GraphicsHandler::initialize(WINDOW_DIMENSIONS, &terrain);
     
 
     event_loop.run(move |event, _, control_flow| {
@@ -71,13 +73,12 @@ fn main() {
                 if input_helper.position_key_pressed() {player.debug()}
                 
                 if input_helper.mouse_button_down(1) {
-                    player.transformation_matrix.try_inverse().unwrap() * Vector4::new(0., 0., 1., 1.);
-                    
-                    terrain_pos = Vector3::new(1, 1, 0);
-                    
-                    
-                    graphics_handler.update_distance_field(terrain_pos, 1);
+                    terrain.raycast_destroy_block(&player, 0, &mut graphics_handler);
                 }
+                if input_helper.mouse_button_down(3) {
+                    terrain.raycast_place_block(&player, 2, &mut graphics_handler);
+                }
+                
                 
                 graphics_handler.redraw(player);
             }

@@ -50,6 +50,13 @@ impl Player {
 			.append_translation(&(&(self.transformation_matrix.column(3).xyz()) + movement));
 	}
 	
+	pub fn forward(&self) -> Vector3<f32> {
+		self.transformation_matrix.try_inverse().unwrap().transform_vector(&Vector3::<f32>::new(0., 0., 1.)) as Vector3<f32>
+	}
+	pub fn position(&self) -> Vector3<f32> {
+		Vector3::new(self.transformation_matrix[12], self.transformation_matrix[13], self.transformation_matrix[14])
+	}
+	
 	pub(crate) fn debug(&self) {
 		println!("position: {:?}", (self.transformation_matrix[12], self.transformation_matrix[13], self.transformation_matrix[14]));
 	}

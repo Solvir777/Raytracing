@@ -67,8 +67,8 @@ use vulkano::image::sampler::{Filter, SamplerMipmapMode};
 use winit::{event_loop::EventLoop, window::Window, window::WindowBuilder};
 
 use crate::player::Player;
+use crate::terrain::{CHUNK_SIZE, Terrain};
 
-const CHUNK_SIZE: u32 = 16;
 mod rendering_cs {
     vulkano_shaders::shader! {
         ty: "compute",
@@ -358,7 +358,7 @@ impl GraphicsHandler {
         .expect("failed to create distance field pipeline");
         (distance_field_image_view, df_pipeline)
     }
-    pub fn initialize(img_size: (u32, u32)) -> (GraphicsHandler, EventLoop<()>) {
+    pub fn initialize(img_size: (u32, u32), initial_terrain: &Terrain) -> (GraphicsHandler, EventLoop<()>) {
         let (
             window,
             device,
@@ -377,13 +377,13 @@ impl GraphicsHandler {
         let previous_frame_end = Some(sync::now(device.clone()).boxed());
         
         let terrain_buffer = Self::create_distance_field(
-            Vector3::new(0, 0, 0),
             device.clone(),
             queue.clone(),
             df_pipeline.clone(),
             descriptor_set_allocator.clone(),
             memory_allocator.clone(),
-            df_image.clone()
+            df_image.clone(),
+            initial_terrain
         );
         
 
@@ -511,20 +511,16 @@ impl GraphicsHandler {
         future.wait(None).unwrap();
     }
     pub fn recreate_swapchain(&mut self) {self.recreate_swapchain = true}
-
+    
     pub fn create_distance_field(
-        chunk_pos: Vector3<i32>,
         device: Arc<Device>,
         queue: Arc<Queue>,
         distance_field_pipeline: Arc<ComputePipeline>,
         descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
         memory_allocator: Arc<StandardMemoryAllocator>,
         distance_field_image_view: Arc<ImageView>,
+        terrain: &Terrain,
     ) -> Subbuffer<[u32; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize]> {
-        
-        
-        
-        let terrain = world_function(chunk_pos);
         
         let terrain_buffer = Buffer::from_data(
             memory_allocator.clone(),
@@ -537,7 +533,7 @@ impl GraphicsHandler {
                     | MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            terrain,
+            terrain.get_data(),
         )
             .unwrap();
         
@@ -603,12 +599,11 @@ impl GraphicsHandler {
     
     pub fn update_distance_field(
         &mut self,
-        block_pos: Vector3<i32>,
+        block_index: usize,
         block_type: u32,
     ) {
-        let index = block_pos.x as usize * CHUNK_SIZE as usize * CHUNK_SIZE as usize + block_pos.y as usize * CHUNK_SIZE as usize + block_pos.z as usize;
         
-        self.terrain_buffer.write().unwrap()[index] = block_type;
+        self.terrain_buffer.write().unwrap()[block_index] = block_type;
         
         let command_buffer = {
             let command_buffer_allocator = StandardCommandBufferAllocator::new(
@@ -763,32 +758,4 @@ impl GraphicsHandler {
     }
 }
 
-fn world_function(
-    chunk_pos: Vector3<i32>,
-) -> [u32; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize] {
-    const SCALE: f64 = 0.05;
-    let noise_gen: OpenSimplexNoise = OpenSimplexNoise::new(Some(883_279_212_983_182_319));
-    let mut terrain_data = [0u32; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize];
-    for i in 0..(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) {
-        let (x, y, z) = (
-            i / (CHUNK_SIZE * CHUNK_SIZE),
-            i % (CHUNK_SIZE * CHUNK_SIZE) / CHUNK_SIZE,
-            i % CHUNK_SIZE,
-        );
 
-        let noise_pos = Vector3::<f64>::new(
-            (chunk_pos.x + x as i32) as f64,
-            (chunk_pos.y + y as i32) as f64,
-            (chunk_pos.z + z as i32) as f64,
-        ) * SCALE;
-        let mut value = (noise_gen.eval_3d(noise_pos.x, noise_pos.y, noise_pos.z) < 0.) as u32;
-        let up_value = (noise_gen.eval_3d(noise_pos.x, noise_pos.y + 1. * SCALE, noise_pos.z) < 0.) as u32;
-        if value == 1 {
-            if up_value == 1 {
-                value = 2;
-            }
-        }
-        terrain_data[(x * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + z) as usize] = value;
-    }
-    terrain_data
-}
