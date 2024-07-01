@@ -11,7 +11,7 @@ impl Player {
 	const SPEED: f32 = 30.;
 	pub fn new() -> Self{
 		Self{
-			transformation_matrix: Matrix4::<f32>::identity().append_translation(&Vector3::<f32>::new(-5.5, 5.5, -5.5)),
+			transformation_matrix: Matrix4::<f32>::identity().append_translation(&Vector3::<f32>::new(-50.5, 50.5, -50.5)),
 		}
 	}
 	

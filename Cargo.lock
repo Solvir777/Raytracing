@@ -1335,6 +1335,7 @@ dependencies = [
  "image",
  "nalgebra",
  "opensimplex_noise_rs",
+ "png",
  "vulkano",
  "vulkano-shaders",
  "vulkano-util",
