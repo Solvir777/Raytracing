@@ -16,6 +16,3 @@ nalgebra = { version = "0.32.5", features = ["bytemuck"] }
 bytemuck = "1.15.0"
 opensimplex_noise_rs = "0.3.0"
 png = "0.17.13"
-
-[profile.dev.build-override]
-opt-level = 3

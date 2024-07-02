@@ -1,10 +1,9 @@
-use std::ops::Div;
-use nalgebra::{min, Vector3};
+use nalgebra::Vector3;
 use opensimplex_noise_rs::OpenSimplexNoise;
 use crate::graphics_handler::GraphicsHandler;
 use crate::player::Player;
 
-pub const CHUNK_SIZE: u32 = 16;
+pub const CHUNK_SIZE: u32 = 64;
 
 pub struct Terrain {
 	data: [u32; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize],
@@ -53,8 +52,6 @@ impl Terrain{
 		}
 		
 		let ioctand01 = Vector3::new((rd.x > 0.) as i32, (rd.y > 0.) as i32, (rd.z > 0.) as i32) as Vector3<i32>;
-		let ioctand11 = ioctand01 * 2 - Vector3::new(1, 1, 1);
-		
 		let f_octand11 = (ioctand01 * 2 - Vector3::new(1, 1, 1)).map(|x| x as f32) as Vector3<f32>;
 		let mut int_point = {
 			let first_contact = ro + rd * 0f32.max(t_near);
@@ -70,7 +67,7 @@ impl Terrain{
 		let ray_step = rd.map(|el| 1. / el) as Vector3<f32>;
 		let increments = rd.map(|el| (0. < el) as i32 * 2 - 1) as Vector3<i32>;
 		
-		for i in 0..200 {
+		for _ in 0..200 {
 			
 			let minindex = (dir_values.zip_map(&f_octand11, |x, y| x * y)).imin();
 			
@@ -80,7 +77,7 @@ impl Terrain{
 				a[minindex] += increments[minindex];
 				a
 			};
-			if(!is_in_bounds(grid_p, 0, 16) || !is_in_bounds(next, 0, 16)) {
+			if(!is_in_bounds(grid_p, 0, CHUNK_SIZE as i32) || !is_in_bounds(next, 0, CHUNK_SIZE as i32)) {
 				return;
 			}
 			if(self.data[index(next)] != 0) {
@@ -96,7 +93,6 @@ impl Terrain{
 	pub fn raycast_destroy_block(
 		&mut self,
 		player: &Player,
-		block_type: u32,
 		graphics_handler: &mut GraphicsHandler,
 	) {
 		fn is_in_bounds(p: Vector3<i32>, lower: i32, upper: i32) -> bool{
@@ -114,7 +110,6 @@ impl Terrain{
 		}
 		
 		let ioctand01 = Vector3::new((rd.x > 0.) as i32, (rd.y > 0.) as i32, (rd.z > 0.) as i32) as Vector3<i32>;
-		let ioctand11 = ioctand01 * 2 - Vector3::new(1, 1, 1);
 		
 		let f_octand11 = (ioctand01 * 2 - Vector3::new(1, 1, 1)).map(|x| x as f32) as Vector3<f32>;
 		let mut int_point = {
@@ -131,16 +126,16 @@ impl Terrain{
 		let ray_step = rd.map(|el| 1. / el) as Vector3<f32>;
 		let increments = rd.map(|el| (0. < el) as i32 * 2 - 1) as Vector3<i32>;
 		
-		for i in 0..200 {
+		for _ in 0..200 {
 			
 			let minindex = (dir_values.zip_map(&f_octand11, |x, y| x * y)).imin();
 			
 			let grid_p = int_point - ioctand01;
-			if(!is_in_bounds(grid_p, 0, 16)) {
+			if(!is_in_bounds(grid_p, 0, CHUNK_SIZE as i32)) {
 				return;
 			}
 			if(self.data[index(grid_p)] != 0) {
-				self.place_block(grid_p, block_type, graphics_handler);
+				self.place_block(grid_p, 0, graphics_handler);
 				return;
 			}
 			int_point[minindex] += increments[minindex];
@@ -176,7 +171,6 @@ fn world_function(
 				value = 2;
 			}
 		}
-		value = (noise_pos.y < 0.5) as u32;
 		terrain_data[(x * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + z) as usize] = value;
 	}
 	terrain_data

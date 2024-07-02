@@ -1,14 +1,14 @@
 #version 460
+const uint CHUNK_SIZE = 64;
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+layout(local_size_x = 16, local_size_y = 8, local_size_z = 8) in;
 
-const uint CHUNK_SIZE = 16;
 
 layout(set = 0, binding = 0) buffer Data {
     uint data[CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
 };
 
-layout(set = 0, binding = 1, r32ui) writeonly uniform uimage3D myImage;
+layout(set = 0, binding = 1, r32ui)  uniform uimage3D myImage;
 
 void initial() {
     uvec3 upos = gl_GlobalInvocationID;

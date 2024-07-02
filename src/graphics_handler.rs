@@ -1,5 +1,3 @@
-use nalgebra::Vector3;
-use opensimplex_noise_rs::OpenSimplexNoise;
 use std::{
 	sync::Arc,
 	time::SystemTime
@@ -576,7 +574,7 @@ impl GraphicsHandler {
                     set.clone(),
                 )
                 .unwrap()
-                .dispatch([CHUNK_SIZE / 8, CHUNK_SIZE / 8, CHUNK_SIZE / 8])
+                .dispatch([CHUNK_SIZE / 16, CHUNK_SIZE / 8, CHUNK_SIZE / 8])
                 .unwrap();
 
             builder.build().unwrap()
@@ -589,10 +587,6 @@ impl GraphicsHandler {
             .unwrap();
 
         future.wait(None).unwrap();
-        println!(
-            "generated terrain (took {} ms)!",
-            SystemTime::now().duration_since(timer).unwrap().as_millis()
-        );
         terrain_buffer
     }
     
@@ -644,7 +638,7 @@ impl GraphicsHandler {
                     set.clone(),
                 )
                 .unwrap()
-                .dispatch([CHUNK_SIZE / 8, CHUNK_SIZE / 8, CHUNK_SIZE / 8])
+                .dispatch([CHUNK_SIZE / 16, CHUNK_SIZE / 8, CHUNK_SIZE / 8])
                 .unwrap();
             
             builder.build().unwrap()
@@ -657,10 +651,6 @@ impl GraphicsHandler {
             .unwrap();
         
         future.wait(None).unwrap();
-        println!(
-            "re-generated terrain (took {} ms)!",
-            SystemTime::now().duration_since(timer).unwrap().as_millis()
-        );
     }
 
     fn create_block_textures(&mut self) -> Arc<ImageView> {
@@ -668,7 +658,7 @@ impl GraphicsHandler {
             // Replace with your actual image array dimensions.
             let format = Format::R8G8B8A8_SRGB;
             let extent: [u32; 3] = [8, 8, 1];
-            let array_layers = 6u32;
+            let array_layers = 9u32;
 
             let buffer_size = format.block_size()
                 * extent
@@ -701,6 +691,9 @@ impl GraphicsHandler {
                     include_bytes!("textures/stone_side.png").as_slice(),
                     include_bytes!("textures/stone_top.png").as_slice(),
                     include_bytes!("textures/stone_bottom.png").as_slice(),
+                    include_bytes!("textures/mirror_side.png").as_slice(),
+                    include_bytes!("textures/mirror_top.png").as_slice(),
+                    include_bytes!("textures/mirror_bottom.png").as_slice(),
                 ] {
                     let decoder = png::Decoder::new(png_bytes);
                     let mut reader = decoder.read_info().unwrap();
