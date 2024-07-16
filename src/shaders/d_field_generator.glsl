@@ -1,40 +1,46 @@
 #version 460
 const uint CHUNK_SIZE = 64;
 
-layout(local_size_x = 16, local_size_y = 8, local_size_z = 8) in;
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 
-layout(set = 0, binding = 0) buffer Data {
-    uint data[CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
-};
+layout(push_constant) readonly uniform SetBlockData{
+    ivec3 pos;
+    uint value;
+} block;
 
-layout(set = 0, binding = 1, r32ui)  uniform uimage3D myImage;
+layout(set = 0, binding = 0, r32i) uniform iimage3D df[27];
 
-void initial() {
-    uvec3 upos = gl_GlobalInvocationID;
-    ivec3 ipos = ivec3(upos);
-    uint index = upos.x * CHUNK_SIZE * CHUNK_SIZE + upos.y * CHUNK_SIZE + upos.z;
-    if(data[index] == 0) {//block is air -> find nearest solid
-        uint minimum = CHUNK_SIZE;
-        for (int x = 0; x < CHUNK_SIZE; x++) {
-            for (int y = 0; y < CHUNK_SIZE; y++) {
-                for (int z = 0; z < CHUNK_SIZE; z++) {
-                    ivec3 lol = ivec3(x, y, z);
-                    uint other_index = x * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + z;
-                    if(data[other_index] != 0) {
-                        uint cheby_dist = max(abs(ipos.x - lol.x), max(abs(ipos.y - lol.y), abs(ipos.z - lol.z)));
-                        minimum = min(minimum, cheby_dist);
-                    }
+void update_position(ivec3 pos) {
+    int min_dist = int(CHUNK_SIZE);
+    for (int x = 0; x < CHUNK_SIZE; x++) {
+        for (int y = 0; y < CHUNK_SIZE; y++) {
+            for (int z = 0; z < CHUNK_SIZE; z++) {
+                bool isSolid = 0 < imageLoad(df[0], ivec3(x, y, z)).x;
+                if(isSolid) {
+                    int cheby_dist = max(abs(pos.x - x), max(abs(pos.y - y), abs(pos.z - z)));
+                    min_dist = min(min_dist, cheby_dist);
                 }
             }
         }
-        imageStore(myImage, ipos, uvec4(minimum));
     }
-    else{
-        imageStore(myImage, ipos, uvec4(data[index] | 2147483648));
-    }
+    imageStore(df[0], pos, ivec4(min_dist));
 }
 
 void main() {
-    initial();
+    ivec3 my_pos = ivec3(gl_GlobalInvocationID);
+    int cheby_dist = max(abs(block.pos.x - my_pos.x), max(abs(block.pos.y - my_pos.y), abs(block.pos.z - my_pos.z)));
+    if(block.value != 0) {
+        if(my_pos == block.pos) { //this is the placed block -> change block state
+            imageStore(df[0], my_pos, -ivec4(block.value));
+            return;
+        }
+        imageAtomicMin(df[0], my_pos, cheby_dist); //-> if this is solid nothing will change, else the lesser distance will be stored
+    }
+    else{
+        int my_value = imageLoad(df[0], my_pos).x;
+        if (my_value == cheby_dist) { //this needs to find next neighbor that is near
+            //update_position(my_pos);
+        }
+    }
 }

@@ -1,7 +1,11 @@
+use vulkano::DeviceSize;
+use vulkano::buffer::BufferContents;
+use nalgebra::Vector3;
 use std::{
 	sync::Arc,
 	time::SystemTime
 };
+use std::time::Duration;
 use vulkano::{
 	buffer::{Buffer, BufferCreateInfo, BufferUsage},
 	command_buffer::{
@@ -33,10 +37,6 @@ use vulkano::{
 	},
 	descriptor_set::{
 		allocator::StandardDescriptorSetAllocator,
-		layout::{
-			DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateFlags,
-			DescriptorSetLayoutCreateInfo, DescriptorType,
-		},
 		PersistentDescriptorSet, WriteDescriptorSet,
 	},
 	device::{Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags},
@@ -60,27 +60,35 @@ use vulkano::{
 	Validated
 };
 use vulkano::buffer::Subbuffer;
-use vulkano::command_buffer::PrimaryCommandBufferAbstract;
+use vulkano::command_buffer::{PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract};
+use vulkano::device::DeviceOwned;
 use vulkano::image::sampler::{Filter, SamplerMipmapMode};
 use winit::{event_loop::EventLoop, window::Window, window::WindowBuilder};
-
+use winit::dpi::LogicalPosition;
+use winit::window::CursorGrabMode;
 use crate::player::Player;
-use crate::terrain::{CHUNK_SIZE, Terrain};
+use crate::tree::{CHUNK_SIZE, CHUNK_SIZE_3};
+use crate::tree::Tree;
+use crate::shaders::df_cs;
+use crate::shaders::rendering_cs;
 
-mod rendering_cs {
-    vulkano_shaders::shader! {
-        ty: "compute",
-        path: r"src/shaders/raytracer.glsl",
+
+const RENDER_DIST: usize = 3;
+
+#[repr(C)]
+#[derive(BufferContents)]
+pub struct SetBlockData{
+    pos: Vector3::<i32>,
+    value: u32,
+}
+impl SetBlockData {
+    pub fn new(pos: Vector3::<i32>, value: u32) -> Self{
+        Self{
+            pos,
+            value
+        }
     }
 }
-
-mod df_cs {
-    vulkano_shaders::shader! {
-        ty: "compute",
-        path: r"src/shaders/d_field_generator.glsl",
-    }
-}
-
 pub struct GraphicsHandler {
     window: Arc<Window>,
     device: Arc<Device>,
@@ -93,12 +101,15 @@ pub struct GraphicsHandler {
     recreate_swapchain: bool,
     memory_allocator: Arc<StandardMemoryAllocator>,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
-    distance_field_image_view: Arc<ImageView>,
-    terrain_buffer: Subbuffer<[u32; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize]>,
+    distance_field_image_view: Vec<Arc<ImageView>>,
 }
 
 
 impl GraphicsHandler {
+    pub fn grab_cursor(&self) {
+        self.window.set_cursor_grab(CursorGrabMode::Confined).unwrap();
+        self.window.set_cursor_visible(false);
+    }
     fn setup(
         img_size: (u32, u32),
     ) -> (
@@ -140,13 +151,13 @@ impl GraphicsHandler {
             .expect("couldn't find a graphical queue family")
             as u32;
 
-        let window = Arc::new(
+        let mut window = Arc::new(
             WindowBuilder::new()
                 .with_inner_size(winit::dpi::LogicalSize::new(img_size.0, img_size.1))
                 .build(&event_loop)
                 .unwrap(),
         );
-
+        
         let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
@@ -210,7 +221,6 @@ impl GraphicsHandler {
             device.clone(),
             Default::default(),
         ));
-
         (
             window,
             device,
@@ -231,60 +241,18 @@ impl GraphicsHandler {
         let render_stage = PipelineShaderStageCreateInfo {
             ..PipelineShaderStageCreateInfo::new(render_cs)
         };
-
-        let render_pipeline_descriptor_bindings: std::collections::BTreeMap<
-            u32,
-            DescriptorSetLayoutBinding,
-        > = {
-            let mut bindings = std::collections::BTreeMap::default();
-            bindings.insert(
-                0,
-                DescriptorSetLayoutBinding {
-                    stages: ShaderStages::COMPUTE,
-                    ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageImage)
-                },
-            );
-            bindings.insert(
-                1,
-                DescriptorSetLayoutBinding {
-                    stages: ShaderStages::COMPUTE,
-                    ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageImage)
-                },
-            );
-	        bindings.insert(
-		        2,
-		        DescriptorSetLayoutBinding{
-			        stages: ShaderStages::COMPUTE,
-			        ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::SampledImage)
-		        }
-	        );
-	        bindings.insert(
-		        3,
-		        DescriptorSetLayoutBinding{
-			        stages: ShaderStages::COMPUTE,
-			        ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::Sampler)
-		        }
-	        );
-            bindings
-        };
+        
         let render_pipeline_layout = PipelineLayout::new(
             device.clone(),
             PipelineLayoutCreateInfo {
-                set_layouts: vec![DescriptorSetLayout::new(
-                    device.clone(),
-                    DescriptorSetLayoutCreateInfo {
-                        flags: DescriptorSetLayoutCreateFlags::empty(),
-                        bindings: render_pipeline_descriptor_bindings,
-                        ..Default::default()
-                    },
-                )
-                .expect("Failed to create DescriptorSetLayout")],
                 push_constant_ranges: vec![PushConstantRange {
                     stages: ShaderStages::COMPUTE,
                     offset: 0u32,
                     size: 64u32,
                 }],
-                ..Default::default()
+                ..PipelineDescriptorSetLayoutCreateInfo::from_stages([&render_stage])
+                .into_pipeline_layout_create_info(device.clone())
+                .unwrap()
             },
         )
         .unwrap();
@@ -297,42 +265,46 @@ impl GraphicsHandler {
         .expect("failed to create rendering pipeline")
     }
 
-    fn setup_distance_field(device: Arc<Device>, memory_allocator: Arc<StandardMemoryAllocator>) -> (Arc<ImageView>, Arc<ComputePipeline>) {
-        let distance_field_image_view = {
-            let image = Image::new(
-                memory_allocator.clone(),
-                ImageCreateInfo {
-                    image_type: ImageType::Dim3d,
-                    format: Format::R32_UINT,
-                    extent: [CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE],
-                    samples: vulkano::image::SampleCount::Sample1,
-                    tiling: vulkano::image::ImageTiling::Optimal,
-                    usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_DST,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-
-            ImageView::new(
-                image.clone(),
-                ImageViewCreateInfo {
-                    view_type: vulkano::image::view::ImageViewType::Dim3d,
-                    format: Format::R32_UINT,
-                    subresource_range: vulkano::image::ImageSubresourceRange {
-                        aspects: ImageAspects::COLOR,
-                        mip_levels: 0..1,
-                        array_layers: 0..1,
+    fn setup_distance_field(device: Arc<Device>, memory_allocator: Arc<StandardMemoryAllocator>) -> (Vec<Arc<ImageView>>, Arc<ComputePipeline>) {
+        let mut df_image_views: Vec<Arc<ImageView>> = vec!();
+        for _ in 0..(RENDER_DIST * RENDER_DIST * RENDER_DIST) {
+            let distance_field_image_view = {
+                let image = Image::new(
+                    memory_allocator.clone(),
+                    ImageCreateInfo {
+                        image_type: ImageType::Dim3d,
+                        format: Format::R32_SINT,
+                        extent: [CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE],
+                        samples: vulkano::image::SampleCount::Sample1,
+                        tiling: vulkano::image::ImageTiling::Optimal,
+                        usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_DST,
+                        ..Default::default()
                     },
-                    usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
-                    ..Default::default()
-                },
-            )
-            .unwrap()
-        };
+                    AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                        ..Default::default()
+                    },
+                )
+                    .unwrap();
+                
+                ImageView::new(
+                    image.clone(),
+                    ImageViewCreateInfo {
+                        view_type: vulkano::image::view::ImageViewType::Dim3d,
+                        format: Format::R32_SINT,
+                        subresource_range: vulkano::image::ImageSubresourceRange {
+                            aspects: ImageAspects::COLOR,
+                            mip_levels: 0..1,
+                            array_layers: 0..1,
+                        },
+                        usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
+                        ..Default::default()
+                    },
+                )
+                    .unwrap()
+            };
+            df_image_views.push(distance_field_image_view);
+        }
 
         let df_compute_shader = df_cs::load(device.clone()).unwrap();
 
@@ -351,12 +323,14 @@ impl GraphicsHandler {
         let df_pipeline = ComputePipeline::new(
             device.clone(),
             None,
-            ComputePipelineCreateInfo::stage_layout(df_stage, df_pipeline_layout),
+            ComputePipelineCreateInfo::stage_layout(df_stage.clone(), df_pipeline_layout.clone()),
         )
         .expect("failed to create distance field pipeline");
-        (distance_field_image_view, df_pipeline)
+        
+        
+        (df_image_views, df_pipeline)
     }
-    pub fn initialize(img_size: (u32, u32), initial_terrain: &Terrain) -> (GraphicsHandler, EventLoop<()>) {
+    pub fn initialize(img_size: (u32, u32)) -> (GraphicsHandler, EventLoop<()>) {
         let (
             window,
             device,
@@ -369,24 +343,12 @@ impl GraphicsHandler {
         ) = Self::setup(img_size);
 
         let render_pipeline = Self::setup_render_pipeline(device.clone());
-        let (df_image, df_pipeline) =
+        let (df_images, df_pipeline) =
             Self::setup_distance_field(device.clone(), memory_allocator.clone());
 
         let previous_frame_end = Some(sync::now(device.clone()).boxed());
-        
-        let terrain_buffer = Self::create_distance_field(
-            device.clone(),
-            queue.clone(),
-            df_pipeline.clone(),
-            descriptor_set_allocator.clone(),
-            memory_allocator.clone(),
-            df_image.clone(),
-            initial_terrain
-        );
-        
-
-        (Self {
-            distance_field_image_view: df_image,
+        let mut s = Self {
+            distance_field_image_view: df_images,
             previous_frame_end,
             window,
             device,
@@ -398,11 +360,41 @@ impl GraphicsHandler {
             descriptor_set_allocator,
             recreate_swapchain: true,
             memory_allocator,
-            terrain_buffer
-        },
-         event_loop)
+        };
+        s.clear_images();
+        (
+            s,
+            event_loop
+        )
     }
-
+    fn clear_images(&mut self) {
+        for i in 0..(RENDER_DIST * RENDER_DIST * RENDER_DIST) {
+            
+            let mut builder = AutoCommandBufferBuilder::primary(
+                &StandardCommandBufferAllocator::new(
+                    self.device.clone(),
+                    Default::default()
+                ),
+                self.queue.queue_family_index(),
+                CommandBufferUsage::OneTimeSubmit,
+            )
+                .unwrap();
+            builder
+                .clear_color_image(ClearColorImageInfo {
+                    clear_value: ClearColorValue::Int([CHUNK_SIZE as i32; 4]),
+                    ..ClearColorImageInfo::image(self.distance_field_image_view[i].image().clone())
+                })
+                .unwrap();
+            
+            let command_buffer = builder.build().unwrap();
+            let future = sync::now(self.device.clone())
+                .then_execute(self.queue.clone(), command_buffer)
+                .unwrap()
+                .then_signal_fence_and_flush()
+                .unwrap();
+            future.wait(None).unwrap();
+        }
+    }
     pub fn redraw(&mut self, push_constant_data: Player) {
         if self.recreate_swapchain {
             (self.swapchain, self.images) = self
@@ -456,7 +448,6 @@ impl GraphicsHandler {
                 min_filter: Filter::Nearest,
                 mag_filter: Filter::Nearest,
                 mipmap_mode: SamplerMipmapMode::Nearest,
-                
                 ..SamplerCreateInfo::simple_repeat_linear()
             }).unwrap();
 	        
@@ -465,7 +456,7 @@ impl GraphicsHandler {
                 self.render_pipeline.layout().set_layouts()[0].clone(),
                 [
                     WriteDescriptorSet::image_view(0, swapchain_image_view),
-                    WriteDescriptorSet::image_view(1, self.distance_field_image_view.clone()),
+                    WriteDescriptorSet::image_view_array(1, 0, self.distance_field_image_view.clone()),
 	                WriteDescriptorSet::image_view(2, textures),
 	                WriteDescriptorSet::sampler(3, sampler),
                 ],
@@ -509,149 +500,58 @@ impl GraphicsHandler {
         future.wait(None).unwrap();
     }
     pub fn recreate_swapchain(&mut self) {self.recreate_swapchain = true}
-    
-    pub fn create_distance_field(
-        device: Arc<Device>,
-        queue: Arc<Queue>,
-        distance_field_pipeline: Arc<ComputePipeline>,
-        descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
-        memory_allocator: Arc<StandardMemoryAllocator>,
-        distance_field_image_view: Arc<ImageView>,
-        terrain: &Terrain,
-    ) -> Subbuffer<[u32; (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize]> {
+    pub fn set_block(&self, info: SetBlockData) {
+        let command_buffer_allocator = StandardCommandBufferAllocator::new(
+            self.device.clone(),
+            Default::default(),
+        );
         
-        let terrain_buffer = Buffer::from_data(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS
-                    | MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            terrain.get_data(),
+        let mut builder = AutoCommandBufferBuilder::primary(
+            &command_buffer_allocator,
+            self.queue.clone().queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
         )
             .unwrap();
         
-        let command_buffer = {
-            let command_buffer_allocator = StandardCommandBufferAllocator::new(
-                distance_field_pipeline.device().clone(),
-                Default::default(),
-            );
-
-            let mut builder = AutoCommandBufferBuilder::primary(
-                &command_buffer_allocator,
-                queue.queue_family_index(),
-                CommandBufferUsage::OneTimeSubmit,
-            )
+        let set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            self.distance_field_pipeline.clone().layout().set_layouts()[0].clone(),
+            [
+                WriteDescriptorSet::image_view_array(0, 0, self.distance_field_image_view.clone()),
+            ],
+            [],
+        )
             .unwrap();
-
-            let set = PersistentDescriptorSet::new(
-                &descriptor_set_allocator,
-                distance_field_pipeline.layout().set_layouts()[0].clone(),
-                [
-                    WriteDescriptorSet::buffer(0, terrain_buffer.clone()),
-                    WriteDescriptorSet::image_view(1, distance_field_image_view.clone()),
-                ],
-                [],
-            )
-            .unwrap();
-
-            builder
-                .clear_color_image(ClearColorImageInfo {
-                    clear_value: ClearColorValue::Uint([CHUNK_SIZE; 4]),
-                    ..ClearColorImageInfo::image(distance_field_image_view.image().clone())
-                })
-                .unwrap()
-                .bind_pipeline_compute(distance_field_pipeline.clone())
-                .unwrap()
-                .bind_descriptor_sets(
-                    PipelineBindPoint::Compute,
-                    distance_field_pipeline.layout().clone(),
-                    0,
-                    set.clone(),
-                )
-                .unwrap()
-                .dispatch([CHUNK_SIZE / 16, CHUNK_SIZE / 8, CHUNK_SIZE / 8])
-                .unwrap();
-
-            builder.build().unwrap()
-        };
-        let timer = SystemTime::now();
-        let future = sync::now(device.clone())
-            .then_execute(queue.clone(), command_buffer.clone())
+        
+        builder
+            .bind_pipeline_compute(self.distance_field_pipeline.clone())
             .unwrap()
-            .then_signal_fence_and_flush()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                self.distance_field_pipeline.clone().layout().clone(),
+                0,
+                set.clone(),
+            )
+            .unwrap()
+            .push_constants(self.distance_field_pipeline.layout().clone(), 0, info)
+            .unwrap()
+            .dispatch([CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE])
             .unwrap();
-
-        future.wait(None).unwrap();
-        terrain_buffer
-    }
-    
-    
-    pub fn update_distance_field(
-        &mut self,
-        block_index: usize,
-        block_type: u32,
-    ) {
         
-        self.terrain_buffer.write().unwrap()[block_index] = block_type;
+        let command_buffer = builder.build().unwrap();
         
-        let command_buffer = {
-            let command_buffer_allocator = StandardCommandBufferAllocator::new(
-                self.distance_field_pipeline.device().clone(),
-                Default::default(),
-            );
-            
-            let mut builder = AutoCommandBufferBuilder::primary(
-                &command_buffer_allocator,
-                self.queue.queue_family_index(),
-                CommandBufferUsage::OneTimeSubmit,
-            )
-                .unwrap();
-            
-            let set = PersistentDescriptorSet::new(
-                &self.descriptor_set_allocator,
-                self.distance_field_pipeline.layout().set_layouts()[0].clone(),
-                [
-                    WriteDescriptorSet::buffer(0, self.terrain_buffer.clone()),
-                    WriteDescriptorSet::image_view(1, self.distance_field_image_view.clone()),
-                ],
-                [],
-            )
-                .unwrap();
-            
-            builder
-                .clear_color_image(ClearColorImageInfo {
-                    clear_value: ClearColorValue::Uint([CHUNK_SIZE; 4]),
-                    ..ClearColorImageInfo::image(self.distance_field_image_view.image().clone())
-                })
-                .unwrap()
-                .bind_pipeline_compute(self.distance_field_pipeline.clone())
-                .unwrap()
-                .bind_descriptor_sets(
-                    PipelineBindPoint::Compute,
-                    self.distance_field_pipeline.layout().clone(),
-                    0,
-                    set.clone(),
-                )
-                .unwrap()
-                .dispatch([CHUNK_SIZE / 16, CHUNK_SIZE / 8, CHUNK_SIZE / 8])
-                .unwrap();
-            
-            builder.build().unwrap()
-        };
-        let timer = SystemTime::now();
         let future = sync::now(self.device.clone())
-            .then_execute(self.queue.clone(), command_buffer.clone())
+            .then_execute(
+                self.queue.clone(),
+                command_buffer
+            )
             .unwrap()
             .then_signal_fence_and_flush()
             .unwrap();
         
         future.wait(None).unwrap();
     }
+    
 
     fn create_block_textures(&mut self) -> Arc<ImageView> {
         let texture = {
@@ -750,5 +650,3 @@ impl GraphicsHandler {
         texture
     }
 }
-
-
