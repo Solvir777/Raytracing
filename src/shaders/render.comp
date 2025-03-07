@@ -1,0 +1,21 @@
+#version 460
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+
+layout(set = 0, binding = 0) writeonly uniform image2D render_target;
+layout(r16ui, set = 0, binding = 1) readonly uniform uimage3D voxel;
+
+
+
+vec3 col() {
+    vec2 screen_pos_05 = (vec2(gl_GlobalInvocationID.xy)/imageSize(render_target)) - vec2(0.5);
+
+    return vec3(screen_pos_05, 0.5);
+}
+
+void main() {
+    imageLoad(voxel, ivec3(0));
+    vec4 to_write = vec4(col(), 1.);
+    imageStore(render_target, ivec2(gl_GlobalInvocationID.x, imageSize(render_target).y - gl_GlobalInvocationID.y), to_write);
+}
