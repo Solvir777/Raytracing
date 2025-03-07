@@ -291,7 +291,6 @@ impl RenderCore {
 
                     if self.redraw() { return; }
                 }
-
                 _ => (),
             }
         });
