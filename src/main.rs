@@ -7,4 +7,3 @@ fn main() {
 
     core.run(event_loop);
 }
-//test 4
