@@ -3,15 +3,13 @@ mod graphics_settings;
 
 use std::sync::Arc;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
-use vulkano::device::{
-    Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
-};
+use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceOwned, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
-use vulkano::image::{Image, ImageCreateInfo, ImageType, ImageUsage};
+use vulkano::image::{Image, ImageAspects, ImageCreateInfo, ImageSubresourceLayers, ImageType, ImageUsage};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
 use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint};
 use vulkano::swapchain::{
@@ -19,6 +17,7 @@ use vulkano::swapchain::{
 };
 use vulkano::sync::GpuFuture;
 use vulkano::{sync, Validated, VulkanError, VulkanLibrary};
+use vulkano::buffer::{Buffer, BufferCreateFlags, BufferCreateInfo, BufferUsage};
 use vulkano::format::Format;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
@@ -47,7 +46,7 @@ pub fn create_descriptor_sets(
                 pipeline.layout().set_layouts()[0].clone(),
                 [
                     WriteDescriptorSet::image_view(0, x.clone()),
-                    WriteDescriptorSet::image_view(1, buffers.terrain_image.clone()),
+                    WriteDescriptorSet::image_view(1, ImageView::new_default(buffers.image.clone()).unwrap()),
                 ],
                 [],
             )
@@ -243,7 +242,20 @@ impl RenderCore {
         ).unwrap();
 
 
-        let buffers = StorageBuffers::new(terrain_image);
+        let staging_buffer = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo{
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo{
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            (0..(Self::CHUNK_SIZE * Self::CHUNK_SIZE * Self::CHUNK_SIZE)).map(|_| 0)
+        ).unwrap();
+
+        let buffers = StorageBuffers::new(terrain_image, staging_buffer);
 
 
 
@@ -300,6 +312,45 @@ impl RenderCore {
                 _ => (),
             }
         });
+    }
+
+    pub(crate) fn update_terrain(&mut self, data: Vec<u16>) {
+        let mut guard = self.buffers.staging_buffer.write().unwrap();
+
+        guard.copy_from_slice(&data);
+        drop(guard);
+
+        let mut builder = AutoCommandBufferBuilder::primary(
+            &self.command_buffer_allocator,
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        ).unwrap();
+
+        let buffer_image_copy = vulkano::command_buffer::BufferImageCopy {
+            image_subresource: ImageSubresourceLayers{
+                aspects: ImageAspects::COLOR,
+                mip_level: 0,
+                array_layers: 0..1,
+            },
+            image_offset: [0;3], //todo
+            image_extent: [Self::CHUNK_SIZE; 3],
+            ..Default::default()
+        };
+
+        builder
+            .copy_buffer_to_image(
+                CopyBufferToImageInfo {
+                    regions: vec!(buffer_image_copy).into(),
+                    ..CopyBufferToImageInfo::buffer_image(self.buffers.staging_buffer.clone(), self.buffers.image.clone())
+                }
+            ).unwrap();
+
+        let command_buffer = builder.build().unwrap();
+        let future = self
+            .previous_frame_end.take().unwrap()
+            .then_execute(self.queue.clone(), command_buffer)
+            .unwrap();
+        self.previous_frame_end = Some(future.boxed());
     }
 
     fn redraw(&mut self) -> bool {

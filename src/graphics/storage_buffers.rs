@@ -1,16 +1,17 @@
 use std::sync::Arc;
+use vulkano::buffer::Subbuffer;
 use vulkano::image::Image;
-use vulkano::image::view::ImageView;
 
 pub struct StorageBuffers{
-    pub terrain_image: Arc<ImageView>,
+    pub image: Arc<Image>,
+    pub staging_buffer: Subbuffer<[u16]>,
 }
 
 impl StorageBuffers{
-    pub fn new(img: Arc<Image>) -> Self {
-        let view = ImageView::new_default(img).unwrap();
+    pub fn new(image: Arc<Image>, staging_buffer: Subbuffer<[u16]>) -> Self {
         Self{
-            terrain_image: view,
+            image,
+            staging_buffer
         }
     }
 }

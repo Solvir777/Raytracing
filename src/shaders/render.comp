@@ -15,6 +15,17 @@ vec3 col() {
 
 void main() {
     imageLoad(voxel, ivec3(0));
-    vec4 to_write = vec4(col(), 1.);
+
+    ivec2 comp = ivec2(gl_GlobalInvocationID.xy / ivec2(32));
+
+    uint val = imageLoad(voxel, ivec3(comp, 0)).x;
+    vec4 to_write;
+    if(val == 0) {
+        to_write = vec4(col(), 1.);
+    }
+    else{
+        to_write = vec4(0., 1., 0., 1.);
+    }
+
     imageStore(render_target, ivec2(gl_GlobalInvocationID.x, imageSize(render_target).y - gl_GlobalInvocationID.y), to_write);
 }

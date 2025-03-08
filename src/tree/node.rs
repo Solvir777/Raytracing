@@ -13,24 +13,26 @@ pub enum Node{
 
 
 impl Node {
-    fn block_at(pos: IVec3, generator: &Simplex<3>) -> BlockType {
-        let noise = generator.sample(pos.into());
-        if noise < 0. {
+
+    fn generate_block(pos: IVec3, generator: &Simplex<3>) -> BlockType {
+        //let noise = generator.sample(pos.into());
+        let noise = pos.sqr_magnitude();
+        if noise > 201 {
             return BlockType::Air;
         }
         BlockType::SolidBlock(SolidBlock::Stone)
     }
     pub(crate) fn generate(pos: IVec3, size: u32, generator: &Simplex<3>) -> Self {
         if size == 0 {
-            return Self::Leaf(Self::block_at(pos, generator));
+            return Self::Leaf(Self::generate_block(pos, generator));
         }
 
         let children: [Node; 64] = core::array::from_fn(|i| {
-            let x = (i >> 4) as i32;
+            let z = (i >> 4) as i32;
             let y = ((i >> 2) & 0b11) as i32;
-            let z = (i & 0b11) as i32;
+            let x = (i & 0b11) as i32;
 
-            Self::generate(pos + IVec3::new(x, y, z) * (1 << (size-1)), size - 1, generator)
+            Self::generate(pos + IVec3::new(x, y, z) * (1 << (2 * (size-1))), size - 1, generator)
         });
 
         if let Some(val) = same_content(&children) {

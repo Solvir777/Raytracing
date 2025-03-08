@@ -13,7 +13,7 @@ pub enum SolidBlock {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum TransparentBlock {
+pub enum TransparentBlock {
     Glass,
     Water,
 }
