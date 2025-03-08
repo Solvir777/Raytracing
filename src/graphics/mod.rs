@@ -1,4 +1,5 @@
 mod storage_buffers;
+mod graphics_settings;
 
 use std::sync::Arc;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
@@ -24,6 +25,7 @@ use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{Window, WindowBuilder};
+use crate::graphics::graphics_settings::GraphicsSettings;
 use crate::graphics::storage_buffers::StorageBuffers;
 
 pub fn create_descriptor_sets(
@@ -151,6 +153,7 @@ pub fn create_compute_pipeline(device: Arc<Device>) -> Arc<ComputePipeline> {
 }
 
 pub struct RenderCore {
+    settings: GraphicsSettings,
     window: Arc<Window>,
     device: Arc<Device>,
     queue: Arc<Queue>,
@@ -166,7 +169,10 @@ pub struct RenderCore {
 }
 
 impl RenderCore {
+    const CHUNK_SIZE: u32 = 32;
     pub(crate) fn new() -> (EventLoop<()>, RenderCore) {
+        let settings = GraphicsSettings::default();
+
         let event_loop = EventLoop::new();
 
         let library = VulkanLibrary::new().unwrap();
@@ -221,13 +227,12 @@ impl RenderCore {
             device.clone(),
         ));
 
-
         let terrain_image = Image::new(
             memory_allocator.clone(),
             ImageCreateInfo{
                 image_type: ImageType::Dim3d,
                 format: Format::R16_UINT,
-                extent: [32, 32, 32],
+                extent: [RenderCore::CHUNK_SIZE * (2*settings.render_distance + 1) as u32; 3],
                 usage: ImageUsage::TRANSFER_DST | ImageUsage::STORAGE,
                 ..Default::default()
             },
@@ -254,6 +259,7 @@ impl RenderCore {
         (
             event_loop,
             Self {
+                settings,
             buffers,
             window,
             device,
