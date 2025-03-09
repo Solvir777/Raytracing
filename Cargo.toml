@@ -8,3 +8,4 @@ vulkano = "0.34.0"
 winit = "0.28.0"
 vulkano-shaders = "0.34.0"
 libnoise = "1.1.2"
+nalgebra = { version = "0.33.2", features = ["bytemuck"] }

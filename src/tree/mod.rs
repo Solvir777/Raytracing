@@ -1,37 +1,26 @@
-use std::ops::{Shl, ShlAssign, Shr, ShrAssign, Sub};
-use libnoise::Simplex;
+use nalgebra::Vector3;
+use libnoise::{Generator, Simplex};
 use crate::tree::block_ids::{BlockType, SolidBlock};
 use crate::tree::node::Node;
-use crate::tree::ivec3::IVec3;
 
 pub mod node;
 mod block_ids;
-pub mod ivec3;
 
 #[derive(Debug)]
 pub struct Tree{
+    generator: Simplex<3>,
     root: Node,
     size: u32,
-    position: IVec3,
+    position: Vector3<i32>,
 }
-
-pub(crate) fn test() {
-    let tree = Tree::new(3);
-
-    let pos = IVec3::new(4, 0, 1);
-
-    let value = tree.value_at(pos);
-    println!("node at {:?}: {:?}", pos, value);
-}
-
 impl Tree {
     const CHUNK_SIZE: u32 = 32;
-    pub(crate) fn get_chunk(&self, pos: IVec3) -> Vec<u16> {
+    pub(crate) fn get_chunk(&mut self, pos: Vector3<i32>) -> Vec<u16> {
         let mut ret = vec!();
         for x in 0..Self::CHUNK_SIZE {
             for y in 0..Self::CHUNK_SIZE {
                 for z in 0..Self::CHUNK_SIZE {
-                    let val = self.value_at(pos + IVec3(x as i32, y as i32, z as i32));
+                    let val = self.value_at(pos + Vector3::new(x as i32, y as i32, z as i32));
                     ret.push(
                         match val {
                             BlockType::Air => {0}
@@ -44,44 +33,78 @@ impl Tree {
         }
         ret
     }
-    pub(crate) fn new(size: u32) -> Self {
+    pub(crate) fn new() -> Self {
         let generator = Simplex::new(3);
-        let root = Node::generate(IVec3::new(0,0,0), size, &generator);
         Self{
-            root,
-            size,
-            position: IVec3::new(0, 0, 0),
+            generator,
+            root: Node::Leaf(None),
+            size: 0,
+            position: Vector3::new(0, 0, 0),
         }
     }
 
-    fn out_of_bounds(&self, abs_pos: IVec3) -> bool {
+    fn out_of_bounds(&self, abs_pos: Vector3<i32>) -> bool {
         let rel_pos = abs_pos - self.position;
-        rel_pos.0 < 0 || rel_pos.1 < 0 || rel_pos.2 < 0 || rel_pos.0 >= (1 << (self.size * 2)) || rel_pos.1 >= (1 << (self.size * 2)) || rel_pos.2 >= (1 << (self.size * 2))
+        rel_pos.x < 0 || rel_pos.y < 0 || rel_pos.z < 0 || rel_pos.x >= (1 << (self.size * 2)) || rel_pos.y >= (1 << (self.size * 2)) || rel_pos.z >= (1 << (self.size * 2))
     }
 
-    pub fn value_at(&self, absolute_pos: IVec3) -> BlockType {
-        //if self.out_of_bounds(absolute_pos) {
-        //    return BlockType::Air;
-        //}
+
+    pub fn value_at(&mut self, absolute_pos: Vector3<i32>) -> BlockType {
+        self.fit(absolute_pos);
+
         let pos = absolute_pos - self.position;
-        let mut current = &self.root;
+        let mut current = &mut self.root;
         for i in (0..=self.size).rev() {
-            match current {
-                Node::Leaf(content) => { return *content; }
-                Node::Branch(children) => {
-                    let t_pos = pos >> ((i-1) * 2);
-                    let index = as_index(&t_pos);
-                    println!("pos: {:?}", t_pos);
-                    println!("index: {}", index);
-                    current = &children[index];
+            if let Node::Leaf(content) = current {
+                if let Some(block) = content {
+                    return *block;
                 }
+                if i == 0 {
+                    let block_id = Node::generate_block(pos, &self.generator);
+                    *current = Node::Leaf(Some(block_id));
+                    return block_id;
+                }
+                std::mem::swap(current, &mut Node::default_branch());
+            }
+            if let Node::Branch(children) = current {
+                let t_pos = Vector3::new(pos.x >> ((i-1) * 2), pos.y >> ((i-1) * 2), pos.z >> ((i-1) * 2));
+                let index = as_index(&t_pos);
+                current = &mut children[index];
             }
         }
         panic!("shouldnt happen");
     }
+
+    fn fit(&mut self, position: Vector3<i32>) {
+        while self.out_of_bounds(position) {
+            if self.size % 2 == 0 {
+                self.position -= Vector3::new(1, 1, 1) * (1 << (self.size * 2));
+            }
+            else {
+                self.position -= Vector3::new(1, 1, 1) * (1 << (self.size * 2 + 1))
+            }
+
+            //expand the tree so that the old root becomes a child of the new root
+            self.expand();
+            self.size += 1;
+        }
+    }
+
+    /// Expands the tree by one level
+    fn expand(&mut self) {
+        const OPTION_A_INDEX: usize = 21;
+        const OPTION_B_INDEX: usize = 42;
+
+        if self.root != Node::Leaf(None) {
+            let old_root = std::mem::replace(&mut self.root, Node::default_branch());
+            if let Node::Branch(children) = &mut self.root {
+                children[if self.size % 2 == 0 { OPTION_A_INDEX } else { OPTION_B_INDEX }] = old_root;
+            } else { panic!("shouldnt happen"); }
+        }
+    }
 }
 
-fn as_index(p: &IVec3) -> usize {
-    let (x, y, z) = (p.0 & 3, p.1 & 3, p.2 & 3);
+fn as_index(p: &Vector3<i32>) -> usize {
+    let (x, y, z) = (p.x & 3, p.y & 3, p.z & 3);
     (x + (y << 2) + (z << 4)) as usize
 }

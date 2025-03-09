@@ -1,7 +1,11 @@
 mod storage_buffers;
 mod graphics_settings;
+pub mod push_constants;
+use crate::game_logic::key_states::KeyStates;
 
 use std::sync::Arc;
+use std::thread::current;
+use nalgebra::{Matrix4, Vector3};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
@@ -20,11 +24,14 @@ use vulkano::{sync, Validated, VulkanError, VulkanLibrary};
 use vulkano::buffer::{Buffer, BufferCreateFlags, BufferCreateInfo, BufferUsage};
 use vulkano::format::Format;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
-use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
-use winit::event::{Event, WindowEvent};
+use vulkano::pipeline::layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo, PushConstantRange};
+use vulkano::shader::ShaderStages;
+use winit::event::{DeviceEvent, Event, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::{Window, WindowBuilder};
+use winit::window::{CursorGrabMode, Window, WindowBuilder};
+use crate::GameState;
 use crate::graphics::graphics_settings::GraphicsSettings;
+use crate::graphics::push_constants::PushConstants;
 use crate::graphics::storage_buffers::StorageBuffers;
 
 pub fn create_descriptor_sets(
@@ -137,9 +144,16 @@ pub fn create_compute_pipeline(device: Arc<Device>) -> Arc<ComputePipeline> {
 
     let layout = PipelineLayout::new(
         device.clone(),
-        PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage_info.clone()])
-            .into_pipeline_layout_create_info(device.clone())
-            .unwrap(),
+        PipelineLayoutCreateInfo{
+            push_constant_ranges: vec![PushConstantRange{
+                stages: ShaderStages::COMPUTE,
+                offset: 0,
+                size: size_of::<PushConstants>() as u32,
+            }],
+            ..PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage_info.clone()])
+                .into_pipeline_layout_create_info(device.clone())
+                .unwrap()
+        }
     )
         .unwrap();
 
@@ -189,6 +203,10 @@ impl RenderCore {
         .unwrap();
 
         let window = Arc::new(WindowBuilder::new().build(&event_loop).unwrap());
+
+        window.set_cursor_grab(CursorGrabMode::Locked).expect("TODO: panic message");
+        window.set_cursor_visible(false);
+
         let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
         let device_extensions = DeviceExtensions {
@@ -288,9 +306,23 @@ impl RenderCore {
         )
     }
 
-    pub fn run(mut self, event_loop: EventLoop<()>) -> ! {
+    pub fn get_settings(&self) -> GraphicsSettings {
+        self.settings
+    }
+
+    pub fn run(mut self, event_loop: EventLoop<()>, mut game_state: GameState, game_update: fn(&mut RenderCore, &mut GameState) -> PushConstants) -> ! {
         event_loop.run(move |event, _, control_flow| {
             match event {
+                Event::WindowEvent {event: WindowEvent::KeyboardInput { input, ..}, .. } => {
+                    if input.virtual_keycode == Some(VirtualKeyCode::Escape) {
+                        *control_flow = ControlFlow::Exit;
+                        return;
+                    }
+                    game_state.key_states.update(input);
+                }
+                Event::DeviceEvent {event: DeviceEvent::MouseMotion {delta}, ..} => {
+                    game_state.player_look_dir(delta, self.settings.mouse_sensitivity);
+                }
                 Event::WindowEvent {
                     event: WindowEvent::CloseRequested,
                     ..
@@ -303,18 +335,17 @@ impl RenderCore {
                 } => {
                     self.recreate_swapchain = true;
                 }
-                Event::RedrawEventsCleared => {
-
-
-
-                    if self.redraw() { return; }
+                Event::MainEventsCleared => {
+                    let push_constants = game_update(&mut self, &mut game_state);
+                    if self.redraw(push_constants) { return; }
+                    game_state.key_states.reset();
                 }
                 _ => (),
             }
         });
     }
 
-    pub(crate) fn update_terrain(&mut self, data: Vec<u16>) {
+    pub(crate) fn update_terrain(&mut self, data: Vec<u16>, chunk_position: Vector3<i32>) {
         let mut guard = self.buffers.staging_buffer.write().unwrap();
 
         guard.copy_from_slice(&data);
@@ -326,13 +357,15 @@ impl RenderCore {
             CommandBufferUsage::OneTimeSubmit,
         ).unwrap();
 
+        let dest = chunk_position.map(|x| x.rem_euclid((self.settings.render_distance as i32) * 2 + 1) as u32 * Self::CHUNK_SIZE);
+
         let buffer_image_copy = vulkano::command_buffer::BufferImageCopy {
             image_subresource: ImageSubresourceLayers{
                 aspects: ImageAspects::COLOR,
                 mip_level: 0,
                 array_layers: 0..1,
             },
-            image_offset: [0;3], //todo
+            image_offset: [dest.x, dest.y, dest.z],
             image_extent: [Self::CHUNK_SIZE; 3],
             ..Default::default()
         };
@@ -353,7 +386,7 @@ impl RenderCore {
         self.previous_frame_end = Some(future.boxed());
     }
 
-    fn redraw(&mut self) -> bool {
+    fn redraw(&mut self, push_constants: PushConstants) -> bool {
         let image_extent: [u32; 2] = self.window.inner_size().into();
 
         if image_extent.contains(&0) {
@@ -363,7 +396,6 @@ impl RenderCore {
         self.previous_frame_end.as_mut().unwrap().cleanup_finished();
 
         if self.recreate_swapchain {
-            println!("Recreating swapchain");
             let (new_swapchain, new_images) = self
                 .swapchain
                 .recreate(SwapchainCreateInfo {
@@ -408,6 +440,11 @@ impl RenderCore {
         builder
             .bind_pipeline_compute(self.pipeline.clone())
             .unwrap()
+            .push_constants(
+                self.pipeline.layout().clone(),
+                0,
+                push_constants.transform
+            ).unwrap()
             .bind_descriptor_sets(
                 PipelineBindPoint::Compute,
                 self.pipeline.layout().clone(),

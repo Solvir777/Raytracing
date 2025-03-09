@@ -1,30 +1,27 @@
 use std::cmp::PartialEq;
 use crate::tree::block_ids::{BlockType, SolidBlock};
-
 use libnoise::{Generator, Simplex};
-use crate::tree::ivec3::IVec3;
-
+use nalgebra::Vector3;
 
 #[derive(PartialEq, Debug)]
 pub enum Node{
-    Leaf(BlockType),
+    Leaf(Option<BlockType>),
     Branch(Box<[Node; 64]>)
 }
-
-
 impl Node {
-
-    fn generate_block(pos: IVec3, generator: &Simplex<3>) -> BlockType {
-        //let noise = generator.sample(pos.into());
-        let noise = pos.sqr_magnitude();
-        if noise > 201 {
+    pub fn default_branch() -> Self {
+        Self::Branch(Box::new([const { Node::Leaf(None) }; 64]))
+    }
+    pub fn generate_block(pos: Vector3<i32>, generator: &Simplex<3>) -> BlockType {
+        let noise = generator.sample([pos.x as f64, pos.y as f64, pos.z as f64]);
+        if noise > 0.25 {
             return BlockType::Air;
         }
         BlockType::SolidBlock(SolidBlock::Stone)
     }
-    pub(crate) fn generate(pos: IVec3, size: u32, generator: &Simplex<3>) -> Self {
+    pub(crate) fn generate(pos: Vector3<i32>, size: u32, generator: &Simplex<3>) -> Self {
         if size == 0 {
-            return Self::Leaf(Self::generate_block(pos, generator));
+            return Self::Leaf(Some(Self::generate_block(pos, generator)));
         }
 
         let children: [Node; 64] = core::array::from_fn(|i| {
@@ -32,14 +29,12 @@ impl Node {
             let y = ((i >> 2) & 0b11) as i32;
             let x = (i & 0b11) as i32;
 
-            Self::generate(pos + IVec3::new(x, y, z) * (1 << (2 * (size-1))), size - 1, generator)
+            Self::generate(pos + Vector3::new(x, y, z) * (1 << (2 * (size-1))), size - 1, generator)
         });
 
         if let Some(val) = same_content(&children) {
-            return Self::Leaf(val)
+            return Self::Leaf(Some(val))
         }
-
-
         Self::Branch(Box::new(children))
     }
 }
@@ -52,7 +47,7 @@ fn same_content(nodes: &[Node; 64]) -> Option<BlockType> {
             }
             else {false}
         }) {
-            Some(a)
+            a
         }
         else{None}
     }
