@@ -10,6 +10,7 @@ pub struct GameState {
     pub(crate) terrain: Tree,
     start_time: Instant,
     pub(crate) key_states: KeyStates,
+    pub speed_modifier: f32
 }
 
 
@@ -24,12 +25,13 @@ impl GameState {
             terrain: Tree::new(),
             start_time: Instant::now(),
             key_states: KeyStates::new(),
+            speed_modifier: 1.0,
         }
     }
 
-    pub fn update_player(&mut self) {
+    pub fn update_player(&mut self, speed_modifier: f32) {
         self.player.apply_rotation();
-        self.player.update_pos(&self.key_states.currently_pressed);
+        self.player.update_pos(&self.key_states.currently_pressed, speed_modifier);
     }
 
     pub fn get_player_transform(&self) -> Matrix4<f32> {

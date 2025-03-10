@@ -20,20 +20,24 @@ fn main() {
     let (event_loop, mut core) = graphics::RenderCore::new();
     let mut game_state = GameState::new();
 
-    generate_spawn(&mut core);
+    generate_spawn(&mut core, &mut game_state);
 
-    let data = game_state.terrain.get_chunk(Vector3::new(0, 0, 0) as Vector3<i32>);
-
-    core.update_terrain(data, Vector3::new(0, 0, 0));
 
     core.run(event_loop, game_state, move |core, game_state| {
-        game_state.update_player();
+        game_state.update_player(game_state.speed_modifier);
         return PushConstants{
             transform: game_state.get_player_transform()
         }
     });
 }
 
-fn generate_spawn(core: &mut RenderCore) {
-
+fn generate_spawn(core: &mut RenderCore, game_state: &mut GameState) {
+    let render_dist = core.get_settings().render_distance as i32;
+    for x in -render_dist..=render_dist {
+        for y in -render_dist..=render_dist {
+            for z in -render_dist..=render_dist {
+                core.upload_chunk(Vector3::new(x, y, z), game_state);
+            }
+        }
+    }
 }

@@ -1,4 +1,4 @@
-use nalgebra::Vector3;
+use nalgebra::{abs, Vector3};
 use libnoise::{Generator, Simplex};
 use crate::tree::block_ids::{BlockType, SolidBlock};
 use crate::tree::node::Node;
@@ -10,17 +10,18 @@ mod block_ids;
 pub struct Tree{
     generator: Simplex<3>,
     root: Node,
-    size: u32,
-    position: Vector3<i32>,
+    pub(crate) size: u32,
+    pub(crate) position: Vector3<i32>,
 }
 impl Tree {
     const CHUNK_SIZE: u32 = 32;
-    pub(crate) fn get_chunk(&mut self, pos: Vector3<i32>) -> Vec<u16> {
+    pub(crate) fn get_chunk(&mut self, chunk_pos: Vector3<i32>) -> Vec<u16> {
         let mut ret = vec!();
         for x in 0..Self::CHUNK_SIZE {
             for y in 0..Self::CHUNK_SIZE {
                 for z in 0..Self::CHUNK_SIZE {
-                    let val = self.value_at(pos + Vector3::new(x as i32, y as i32, z as i32));
+                    let pos = chunk_pos * Self::CHUNK_SIZE as i32 + Vector3::new(x as i32, y as i32, z as i32);
+                    let val = self.value_at(pos);
                     ret.push(
                         match val {
                             BlockType::Air => {0}
@@ -60,7 +61,7 @@ impl Tree {
                     return *block;
                 }
                 if i == 0 {
-                    let block_id = Node::generate_block(pos, &self.generator);
+                    let block_id = generate_block(absolute_pos, &self.generator);
                     *current = Node::Leaf(Some(block_id));
                     return block_id;
                 }
@@ -90,7 +91,7 @@ impl Tree {
         }
     }
 
-    /// Expands the tree by one level
+    /// Expands the tree by one level without changing size or position
     fn expand(&mut self) {
         const OPTION_A_INDEX: usize = 21;
         const OPTION_B_INDEX: usize = 42;
@@ -107,4 +108,14 @@ impl Tree {
 fn as_index(p: &Vector3<i32>) -> usize {
     let (x, y, z) = (p.x & 3, p.y & 3, p.z & 3);
     (x + (y << 2) + (z << 4)) as usize
+}
+
+
+fn generate_block(abs_pos: Vector3<i32>, generator: &Simplex<3>) -> BlockType {
+    let npos = abs_pos.cast() * 0.025;
+    let noise = generator.sample([npos.x, npos.y, npos.z]);
+    if noise > 0.75 {
+        return BlockType::Air;
+    }
+    BlockType::SolidBlock(SolidBlock::Stone)
 }

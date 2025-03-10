@@ -31,7 +31,7 @@ impl Player {
         self.matrix = Matrix4::identity();
         self.matrix.fixed_slice_mut::<3, 1>(0, 3).copy_from(&translation);
     }
-    pub fn update_pos(&mut self, keys: &HashSet<VirtualKeyCode>) {
+    pub fn update_pos(&mut self, keys: &HashSet<VirtualKeyCode>, speed_modifier: f32) {
         let mut mov = Vector3::zeros();
         let forward = Vector3::new(-self.look_direction.0.sin() , 0., self.look_direction.0.cos());
         let right = Vector3::new(self.look_direction.0.cos() , 0., self.look_direction.0.sin());
@@ -55,7 +55,7 @@ impl Player {
         if keys.contains(&VirtualKeyCode::LShift) {
             mov -= up;
         }
-        let mov = mov.cap_magnitude(Self::BASE_SPEED);
+        let mov = mov.cap_magnitude(Self::BASE_SPEED * speed_modifier);
         self.matrix.append_translation_mut(&mov);
     }
 }

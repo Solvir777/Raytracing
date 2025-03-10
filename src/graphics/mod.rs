@@ -26,7 +26,7 @@ use vulkano::format::Format;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo, PushConstantRange};
 use vulkano::shader::ShaderStages;
-use winit::event::{DeviceEvent, Event, VirtualKeyCode, WindowEvent};
+use winit::event::{DeviceEvent, Event, MouseScrollDelta, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{CursorGrabMode, Window, WindowBuilder};
 use crate::GameState;
@@ -183,6 +183,10 @@ pub struct RenderCore {
 
 impl RenderCore {
     const CHUNK_SIZE: u32 = 32;
+    pub fn upload_chunk(&mut self, chunk_pos: Vector3<i32>, game_state: &mut GameState) {
+        let data = game_state.terrain.get_chunk(chunk_pos);
+        self.update_terrain(data, chunk_pos);
+    }
     pub(crate) fn new() -> (EventLoop<()>, RenderCore) {
         let settings = GraphicsSettings::default();
 
@@ -290,18 +294,18 @@ impl RenderCore {
             event_loop,
             Self {
                 settings,
-            buffers,
-            window,
-            device,
-            queue,
-            swapchain,
-            descriptor_set_allocator,
-            pipeline,
-            descriptorsets,
-            command_buffer_allocator,
-            recreate_swapchain,
-            previous_frame_end,
-            memory_allocator,
+                buffers,
+                window,
+                device,
+                queue,
+                swapchain,
+                descriptor_set_allocator,
+                pipeline,
+                descriptorsets,
+                command_buffer_allocator,
+                recreate_swapchain,
+                previous_frame_end,
+                memory_allocator,
         },
         )
     }
@@ -322,6 +326,14 @@ impl RenderCore {
                 }
                 Event::DeviceEvent {event: DeviceEvent::MouseMotion {delta}, ..} => {
                     game_state.player_look_dir(delta, self.settings.mouse_sensitivity);
+                }
+                Event::WindowEvent {event: WindowEvent::MouseWheel {delta, .. }, .. } => {
+
+                    let modifier = match delta{
+                        MouseScrollDelta::LineDelta(x, y) => {y}
+                        MouseScrollDelta::PixelDelta(x) => {x.y as f32}
+                    };
+                    game_state.speed_modifier += modifier * 0.15;
                 }
                 Event::WindowEvent {
                     event: WindowEvent::CloseRequested,
@@ -349,6 +361,8 @@ impl RenderCore {
         let mut guard = self.buffers.staging_buffer.write().unwrap();
 
         guard.copy_from_slice(&data);
+        let data_id = data.iter().sum::<u16>();
+        println!("gpu: {}, data: {data_id}", guard.iter().sum::<u16>());
         drop(guard);
 
         let mut builder = AutoCommandBufferBuilder::primary(
@@ -379,10 +393,14 @@ impl RenderCore {
             ).unwrap();
 
         let command_buffer = builder.build().unwrap();
-        let future = self
+        let mut future = self
             .previous_frame_end.take().unwrap()
             .then_execute(self.queue.clone(), command_buffer)
+            .unwrap()
+            .then_signal_fence_and_flush()
             .unwrap();
+        future.wait(None).unwrap();
+
         self.previous_frame_end = Some(future.boxed());
     }
 
