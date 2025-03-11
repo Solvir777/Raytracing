@@ -19,6 +19,9 @@ impl Player {
         }
     }
 
+    pub fn get_position(&self) -> Vector3<f32> {
+        self.matrix.fixed_slice::<3, 1>(0, 3).into_owned()
+    }
     pub fn apply_rotation(&mut self) {
         self.reset_rotation();
         let dir = self.look_direction;

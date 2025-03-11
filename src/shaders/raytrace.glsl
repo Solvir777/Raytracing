@@ -8,35 +8,40 @@ const int CHUNK_SIZE = 32;
 
 #include "util.glsl"
 
-bool ray_chunk_intersection(ivec3 chunk_pos, vec3 ro, vec3 rd, out vec3 hit_pos) {
-    int voxel_arr_size = imageSize(voxeldata).x / CHUNK_SIZE;
-    ivec3 index_pos = rem_euclid_ivec3(chunk_pos, voxel_arr_size);
-
-    vec2 near_far = chunk_AABB_test(chunk_pos, ro, rd);
-    if (near_far.x < near_far.y) {
-        return false;
-    }
-
-
-    return true;
-}
+const vec3[] debug_colors = {vec3(1., 0., 0.), vec3(0., 1., 0.), vec3(0., 0., 1.)};
 
 vec3 raycast() {
-    vec2 screen_pos_05 = (vec2(gl_GlobalInvocationID.xy)/imageSize(render_target)) - vec2(0.5);
-
-    const vec2 img_size = imageSize(render_target);
-    const vec2 norm_coordinates = vec2((gl_GlobalInvocationID.xy / vec2(img_size.x)) - vec2(0.5, img_size.y / img_size.x * 0.5));
+    const vec2 render_img_size = imageSize(render_target);
+    const vec2 norm_coordinates = vec2((gl_GlobalInvocationID.xy / render_img_size) - vec2(0.5, render_img_size.y / render_img_size.x * 0.5));
     const vec3 rd = normalize((vec4(norm_coordinates, 1., 1.) * push.cam_transform).xyz);
-
     const vec3 ro = push.cam_transform[3].xyz;
 
-    for (int i = 0; i < 250; i++) {
-        vec3 current_pos = ro + rd * float(i) * 0.3;
-        ivec3 v_pos = ivec3(current_pos);
-        uint value = imageLoad(voxeldata, v_pos).x;
+    int voxel_data_size = imageSize(voxeldata).x;
+
+    if(imageLoad(voxeldata, rem_euclid_ivec3(ivec3(floor(ro)), voxel_data_size)).x == 0) {
+        return vec3(0., 0.8, 0.5);
+    }
+
+    ivec3 oct_rd01 = ivec3(greaterThan(rd, vec3(0.)));
+    ivec3 oct_rd11 = (oct_rd01 * 2) - ivec3(1);
+    int render_dist = (voxel_data_size - CHUNK_SIZE) / (2 * CHUNK_SIZE);
+
+    ivec3 to_chunk_middle = ivec3((vec3(0.5) + floor(ro / CHUNK_SIZE)) * CHUNK_SIZE) - ivec3(floor(ro));
+
+    vec3 t_dist_to_next = ((floor(ro) + oct_rd01) - ro) / rd;
+    for(ivec3 offset = ivec3(0); all(lessThan(offset, ivec3(voxel_data_size / 2) + to_chunk_middle * oct_rd11));) {
+        int next_xyz = argmin(t_dist_to_next);
+        t_dist_to_next[next_xyz] += abs(1. / rd[next_xyz]);
+        offset[next_xyz] += 1;
+
+
+        ivec3 pos = ivec3(floor(ro)) + offset * oct_rd11;
+
+        uint value = imageLoad(voxeldata, rem_euclid_ivec3(pos, voxel_data_size)).x;
         if(value == 0) {
-            return vec3(sin(v_pos.x * 5.), cos(v_pos.y * 0.3415), sin(2.4 + v_pos.z * 0.03));
+            return debug_colors[next_xyz] + 0.5 * vec3(sin(pos.x * 2.), sin(pos.y * 2.), sin(pos.z * 2.));
         }
+
     }
 
     return vec3(0.5);

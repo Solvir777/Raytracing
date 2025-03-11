@@ -4,6 +4,7 @@ layout(set = 0, binding = 0) writeonly uniform image2D render_target;
 #include "raytrace.glsl"
 
 void main() {
+    imageLoad(voxeldata, ivec3(0));
     vec4 to_write = vec4(raycast(), 1.);
     imageStore(render_target, ivec2(gl_GlobalInvocationID.x, imageSize(render_target).y - gl_GlobalInvocationID.y), to_write);
 }

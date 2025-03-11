@@ -7,7 +7,7 @@ pub enum Node{
     Branch(Box<[Node; 64]>)
 }
 impl Node {
-    pub fn default_branch() -> Self {
+    pub fn empty_branch() -> Self {
         Self::Branch(Box::new([const { Node::Leaf(None) }; 64]))
     }
 }

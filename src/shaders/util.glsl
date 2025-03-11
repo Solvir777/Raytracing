@@ -24,3 +24,13 @@ vec2 chunk_AABB_test(ivec3 chunk_pos, vec3 ro, vec3 rd) {
 
     return vec2(t_enter, t_exit);
 }
+
+int argmin(vec3 args) {
+    if (args.x <= args.y && args.x <= args.z) {
+        return 0;
+    } else if (args.y <= args.x && args.y <= args.z) {
+        return 1;
+    } else {
+        return 2;
+    }
+}

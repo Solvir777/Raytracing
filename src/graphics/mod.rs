@@ -182,7 +182,7 @@ pub struct RenderCore {
 }
 
 impl RenderCore {
-    const CHUNK_SIZE: u32 = 32;
+    pub const CHUNK_SIZE: u32 = 32;
     pub fn upload_chunk(&mut self, chunk_pos: Vector3<i32>, game_state: &mut GameState) {
         let data = game_state.terrain.get_chunk(chunk_pos);
         self.update_terrain(data, chunk_pos);
@@ -330,10 +330,10 @@ impl RenderCore {
                 Event::WindowEvent {event: WindowEvent::MouseWheel {delta, .. }, .. } => {
 
                     let modifier = match delta{
-                        MouseScrollDelta::LineDelta(x, y) => {y}
-                        MouseScrollDelta::PixelDelta(x) => {x.y as f32}
+                        MouseScrollDelta::LineDelta(_, y) => {y}
+                        MouseScrollDelta::PixelDelta(delta) => { delta.y as f32}
                     };
-                    game_state.speed_modifier += modifier * 0.15;
+                    game_state.speed_modifier = (game_state.speed_modifier + modifier * 0.3).clamp(0.1, 100.);
                 }
                 Event::WindowEvent {
                     event: WindowEvent::CloseRequested,
@@ -361,8 +361,6 @@ impl RenderCore {
         let mut guard = self.buffers.staging_buffer.write().unwrap();
 
         guard.copy_from_slice(&data);
-        let data_id = data.iter().sum::<u16>();
-        println!("gpu: {}, data: {data_id}", guard.iter().sum::<u16>());
         drop(guard);
 
         let mut builder = AutoCommandBufferBuilder::primary(
@@ -373,6 +371,7 @@ impl RenderCore {
 
         let dest = chunk_position.map(|x| x.rem_euclid((self.settings.render_distance as i32) * 2 + 1) as u32 * Self::CHUNK_SIZE);
 
+        println!("destination: {:?}", dest / Self::CHUNK_SIZE);
         let buffer_image_copy = vulkano::command_buffer::BufferImageCopy {
             image_subresource: ImageSubresourceLayers{
                 aspects: ImageAspects::COLOR,

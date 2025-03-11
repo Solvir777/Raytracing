@@ -1,5 +1,6 @@
 use nalgebra::{abs, Vector3};
 use libnoise::{Generator, Simplex};
+use crate::graphics::RenderCore;
 use crate::tree::block_ids::{BlockType, SolidBlock};
 use crate::tree::node::Node;
 
@@ -14,12 +15,12 @@ pub struct Tree{
     pub(crate) position: Vector3<i32>,
 }
 impl Tree {
-    const CHUNK_SIZE: u32 = 32;
+    const CHUNK_SIZE: u32 = RenderCore::CHUNK_SIZE;
     pub(crate) fn get_chunk(&mut self, chunk_pos: Vector3<i32>) -> Vec<u16> {
         let mut ret = vec!();
-        for x in 0..Self::CHUNK_SIZE {
+        for z in 0..Self::CHUNK_SIZE {
             for y in 0..Self::CHUNK_SIZE {
-                for z in 0..Self::CHUNK_SIZE {
+                for x in 0..Self::CHUNK_SIZE {
                     let pos = chunk_pos * Self::CHUNK_SIZE as i32 + Vector3::new(x as i32, y as i32, z as i32);
                     let val = self.value_at(pos);
                     ret.push(
@@ -50,7 +51,7 @@ impl Tree {
     }
 
 
-    pub fn value_at(&mut self, absolute_pos: Vector3<i32>) -> BlockType {
+    pub(crate) fn value_at(&mut self, absolute_pos: Vector3<i32>) -> BlockType {
         self.fit(absolute_pos);
 
         let pos = absolute_pos - self.position;
@@ -65,7 +66,7 @@ impl Tree {
                     *current = Node::Leaf(Some(block_id));
                     return block_id;
                 }
-                std::mem::swap(current, &mut Node::default_branch());
+                std::mem::swap(current, &mut Node::empty_branch());
             }
             if let Node::Branch(children) = current {
                 let t_pos = Vector3::new(pos.x >> ((i-1) * 2), pos.y >> ((i-1) * 2), pos.z >> ((i-1) * 2));
@@ -97,7 +98,7 @@ impl Tree {
         const OPTION_B_INDEX: usize = 42;
 
         if self.root != Node::Leaf(None) {
-            let old_root = std::mem::replace(&mut self.root, Node::default_branch());
+            let old_root = std::mem::replace(&mut self.root, Node::empty_branch());
             if let Node::Branch(children) = &mut self.root {
                 children[if self.size % 2 == 0 { OPTION_A_INDEX } else { OPTION_B_INDEX }] = old_root;
             } else { panic!("shouldnt happen"); }
@@ -112,9 +113,9 @@ fn as_index(p: &Vector3<i32>) -> usize {
 
 
 fn generate_block(abs_pos: Vector3<i32>, generator: &Simplex<3>) -> BlockType {
-    let npos = abs_pos.cast() * 0.025;
-    let noise = generator.sample([npos.x, npos.y, npos.z]);
-    if noise > 0.75 {
+    let npos = abs_pos.cast() * 0.25;
+    let noise = (npos.x * npos.x + npos.z * npos.z as f32).sqrt() - abs_pos.y as f32;
+    if noise > 0. {
         return BlockType::Air;
     }
     BlockType::SolidBlock(SolidBlock::Stone)
