@@ -26,11 +26,17 @@ vec2 chunk_AABB_test(ivec3 chunk_pos, vec3 ro, vec3 rd) {
 }
 
 int argmin(vec3 args) {
-    if (args.x <= args.y && args.x <= args.z) {
-        return 0;
-    } else if (args.y <= args.x && args.y <= args.z) {
-        return 1;
-    } else {
-        return 2;
+    int min_index = 0;
+    float min_value = args.x;
+
+    if (args.y < min_value) {
+        min_value = args.y;
+        min_index = 1;
     }
+
+    if (args.z < min_value) {
+        min_index = 2;
+    }
+
+    return min_index;
 }

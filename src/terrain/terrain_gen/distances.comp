@@ -1,0 +1,32 @@
+#version 460
+#include "noise.glsl"
+#include "util.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(rg8ui, set = 0, binding = 0) writeonly readonly uniform uimage3D voxel_data;
+
+const int CHUNK_SIZE = 32;
+
+
+void compute_distances() {
+    ivec3 self_pos = ivec3(gl_GlobalInvocationID.xyz);
+    if(imageLoad(voxel_data).x > 0) {
+        return;
+    }
+    int img_size = imageSize(voxel_data).x;
+    for(int x = 0; x < img_size; x++) {
+        for(int y = 0; y < img_size; y++) {
+            for(int z = 0; z < img_size; z++) {
+                ivec3 diffs = min(abs(ivec3(x, y, z) - self_pos), abs(ivec3(x, y, z) - ivec3(img_size) - self_pos));
+                int min_diff = min(min(diffs.x, diffs.y), diffs.z);
+                imageAtomicMin(voxel_data, ivec3(x, y, z), min_diff);
+            }
+        }
+    }
+}
+
+
+void main() {
+    compute_distances();
+}

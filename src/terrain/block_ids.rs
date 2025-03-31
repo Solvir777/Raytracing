@@ -1,4 +1,4 @@
-
+#[repr(u16)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BlockType {
     Air,

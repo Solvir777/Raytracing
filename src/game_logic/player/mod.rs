@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use nalgebra::{Transform3, Vector3, Matrix4};
+use nalgebra::{Vector3, Matrix4};
 use winit::event::VirtualKeyCode;
 
 pub struct Player {
@@ -20,7 +20,7 @@ impl Player {
     }
 
     pub fn get_position(&self) -> Vector3<f32> {
-        self.matrix.fixed_slice::<3, 1>(0, 3).into_owned()
+        self.matrix.fixed_view::<3, 1>(0, 3).into_owned()
     }
     pub fn apply_rotation(&mut self) {
         self.reset_rotation();
@@ -30,9 +30,9 @@ impl Player {
     }
 
     fn reset_rotation(&mut self) {
-        let translation = self.matrix.fixed_slice::<3, 1>(0, 3).into_owned();
+        let translation = self.matrix.fixed_view::<3, 1>(0, 3).into_owned();
         self.matrix = Matrix4::identity();
-        self.matrix.fixed_slice_mut::<3, 1>(0, 3).copy_from(&translation);
+        self.matrix.fixed_view_mut::<3, 1>(0, 3).copy_from(&translation);
     }
     pub fn update_pos(&mut self, keys: &HashSet<VirtualKeyCode>, speed_modifier: f32) {
         let mut mov = Vector3::zeros();
