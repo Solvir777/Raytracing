@@ -1,5 +1,6 @@
 use std::time::Instant;
 use nalgebra::{Matrix4, Vector3};
+use vulkano::sync::GpuFuture;
 use crate::game_logic::key_states::KeyStates;
 use crate::game_logic::player::Player;
 use crate::graphics::GraphicsCore;
@@ -67,11 +68,16 @@ impl GameState {
                             continue;
                         }
                     }
-                    let a = core.upload_chunk_gpu(chunk_position, self);
-                    core.buffers.staging_buffers.push(a.0);
+                    println!("test");
+                    core.upload_chunk_gpu(chunk_position, self);
+                    //core.calculate_distance_field(chunk_position);
                 }
             }
         }
+        println!("waiting");
+        core.previous_frame_end.take().unwrap().then_signal_fence_and_flush().unwrap().wait(None).unwrap();
+        println!("finished");
+        core.previous_frame_end = Some(vulkano::sync::now(core.device.clone()).boxed());
         println!("time to generate chunks: {} secs", t.elapsed().as_secs_f64());
 
     }

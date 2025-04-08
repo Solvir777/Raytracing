@@ -8,13 +8,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use nalgebra::Vector3;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, BufferImageCopy, CommandBufferUsage, CopyBufferToImageInfo, CopyImageToBufferInfo, PrimaryCommandBufferAbstract};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, BlitImageInfo, BufferImageCopy, ClearColorImageInfo, CommandBufferUsage, CopyBufferToImageInfo, CopyImageToBufferInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceOwned, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
-use vulkano::image::{Image, ImageAspects, ImageCreateInfo, ImageSubresourceLayers, ImageType, ImageUsage};
+use vulkano::image::{Image, ImageAspects, ImageCreateInfo, ImageSubresourceLayers, ImageSubresourceRange, ImageType, ImageUsage};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
 use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::swapchain::{
@@ -57,7 +57,8 @@ fn create_raytrace_descriptor_sets(
                 pipeline.layout().set_layouts()[0].clone(),
                 [
                     WriteDescriptorSet::image_view(0, x.clone()),
-                    WriteDescriptorSet::image_view(1, ImageView::new_default(buffers.terrain_image.clone()).unwrap()),
+                    WriteDescriptorSet::image_view(1, ImageView::new_default(buffers.block_type_image.clone()).unwrap()),
+                    WriteDescriptorSet::image_view(2, ImageView::new_default(buffers.distance_field_image.clone()).unwrap())
                 ],
                 [],
             )
@@ -135,7 +136,8 @@ pub struct RenderCore {
     window: Arc<Window>,
     swapchain: Arc<Swapchain>,
     raytrace_descriptorsets: Vec<Arc<PersistentDescriptorSet>>,
-    recreate_swapchain: bool
+    recreate_swapchain: bool,
+    render_command_buffer: AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
 }
 
 pub struct GraphicsCore {
@@ -153,10 +155,68 @@ pub struct GraphicsCore {
 impl GraphicsCore {
     pub const CHUNK_SIZE: u32 = 32;
     pub const CHUNK_SIZE_3: u32 = Self::CHUNK_SIZE * Self::CHUNK_SIZE * Self::CHUNK_SIZE;
-    pub fn upload_chunk_gpu(&mut self, chunk_pos: Vector3<i32>, game_state: &mut GameState) -> (Subbuffer<[u16]>, Vector3<i32>) {
 
-        let subbuffer = self.buffers.get_staging_buffer();
+    pub(crate) fn calculate_distance_field(&mut self, chunk_position: Vector3<i32>) {
+        let mut builder = AutoCommandBufferBuilder::primary(
+            &self.command_buffer_allocator,
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        ).unwrap();
 
+        let descriptor_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            self.pipelines.distance_field_pipeline.layout().set_layouts()[0].clone(),
+            [
+                WriteDescriptorSet::image_view(0, ImageView::new_default(self.buffers.block_type_image.clone()).unwrap()),
+                WriteDescriptorSet::image_view(1, ImageView::new_default(self.buffers.distance_field_image.clone()).unwrap()),
+            ],
+            [],
+        ).unwrap();
+
+        let clear_color_info = ClearColorImageInfo{
+            regions: vec!(
+                ImageSubresourceRange{
+                    aspects: ImageAspects::COLOR,
+                    mip_levels: 0..1,
+                    array_layers: 0..1,
+                }
+            ).into(),
+            ..ClearColorImageInfo::image(self.buffers.distance_field_image.clone())
+        };
+
+        builder
+            .bind_pipeline_compute(
+                self.pipelines.distance_field_pipeline.clone(),
+            ).unwrap()
+            .push_constants(
+                self.pipelines.distance_field_pipeline.layout().clone(),
+                0,
+                chunk_position
+            ).unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                self.pipelines.distance_field_pipeline.layout().clone(),
+                0,
+                descriptor_set,
+            ).unwrap()
+            .clear_color_image(
+                clear_color_info
+            ).unwrap()
+            .dispatch(
+                [Self::CHUNK_SIZE; 3]
+            ).unwrap();
+
+        let command_buffer = builder.build().unwrap();
+
+
+        self.previous_frame_end = Some(self
+            .previous_frame_end
+            .take()
+            .unwrap()
+            .then_execute(self.queue.clone(), command_buffer)
+            .unwrap().boxed());
+    }
+    pub fn upload_chunk_gpu(&mut self, chunk_pos: Vector3<i32>, game_state: &mut GameState) {
         let mut builder = AutoCommandBufferBuilder::primary(
             &self.command_buffer_allocator,
             self.queue.queue_family_index(),
@@ -168,29 +228,13 @@ impl GraphicsCore {
             &self.descriptor_set_allocator,
             self.pipelines.terrain_generator_pipeline.layout().set_layouts()[0].clone(),
             [
-                WriteDescriptorSet::image_view(0, ImageView::new_default(self.buffers.terrain_image.clone()).unwrap()),
+                WriteDescriptorSet::image_view(0, ImageView::new_default(self.buffers.block_type_image.clone()).unwrap()),
             ],
             [],
         )
             .unwrap();
 
 
-
-        let region = BufferImageCopy{
-            image_subresource: ImageSubresourceLayers {
-                aspects: ImageAspects::COLOR,
-                mip_level: 0,
-                array_layers: 0..1,
-            },
-            image_offset: <[u32; 3]>::from(Self::chunk_pos_to_image_dest(chunk_pos, self.render_struct.settings.render_distance)),
-            image_extent: [Self::CHUNK_SIZE; 3],
-            ..Default::default()
-        };
-
-        let image_to_buffer = CopyImageToBufferInfo{
-            regions: vec!(region).into(),
-            ..CopyImageToBufferInfo::image_buffer(self.buffers.terrain_image.clone(), subbuffer.clone())
-        };
 
         builder
             .bind_pipeline_compute(self.pipelines.terrain_generator_pipeline.clone())
@@ -208,10 +252,6 @@ impl GraphicsCore {
             )
             .unwrap()
             .dispatch([Self::CHUNK_SIZE / 8; 3])
-            .unwrap()
-            .copy_image_to_buffer(
-                image_to_buffer
-            )
             .unwrap();
 
         let command_buffer = builder.build().unwrap();
@@ -222,11 +262,9 @@ impl GraphicsCore {
             .unwrap()
             .then_execute(self.queue.clone(), command_buffer)
             .unwrap().boxed());
-
-        (subbuffer.clone(), chunk_pos)
     }
     pub(crate) fn new() -> (EventLoop<()>, GraphicsCore) {
-
+        
         let settings = GraphicsSettings::default();
 
         let event_loop = EventLoop::new();
@@ -250,7 +288,6 @@ impl GraphicsCore {
         let window = Arc::new(WindowBuilder::new().build(&event_loop).unwrap());
 
         println!("uses xlib:{}", window.xlib_window().is_some());
-        std::thread::sleep(Duration::from_millis(100));
 
         let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
@@ -292,36 +329,33 @@ impl GraphicsCore {
             memory_allocator.clone(),
             ImageCreateInfo{
                 image_type: ImageType::Dim3d,
-                format: Format::R8G8_UINT,
+                format: Format::R16_UINT,
                 extent: [GraphicsCore::CHUNK_SIZE * (2*settings.render_distance + 3) as u32; 3],
                 usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST,
                 ..Default::default()
             },
             AllocationCreateInfo{
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::PREFER_DEVICE,
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
                 ..Default::default()
             }
         ).unwrap();
 
-        let num_chunks_rendered = (|x|{x*x*x})(2 * settings.render_distance as u32 + 3);
-
-        let chunk_staging_buffer = Buffer::from_iter(
+        let distance_field_image = Image::new(
             memory_allocator.clone(),
-            BufferCreateInfo{
-                usage: BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+            ImageCreateInfo{
+                image_type: ImageType::Dim3d,
+                format: Format::R16_UINT,
+                extent: [GraphicsCore::CHUNK_SIZE * (2*settings.render_distance + 3) as u32; 3],
+                usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST,
                 ..Default::default()
             },
             AllocationCreateInfo{
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
                 ..Default::default()
-            },
-            (0..(Self::CHUNK_SIZE_3 * num_chunks_rendered)).map(|_| 0u16)
+            }
         ).unwrap();
 
-        let staging_subbuffers = (0..num_chunks_rendered).map(|i| chunk_staging_buffer.clone().slice(((Self::CHUNK_SIZE_3 * i) as DeviceSize)..(Self::CHUNK_SIZE_3 * (i + 1)) as DeviceSize)).collect::<Vec<_>>();
-
-
-        let buffers = StorageBuffers::new(terrain_image, staging_subbuffers);
+        let buffers = StorageBuffers::new(terrain_image, distance_field_image);
         
         let pipelines = Pipelines::new(device.clone());
         
@@ -335,10 +369,17 @@ impl GraphicsCore {
         let previous_frame_end = Some(sync::now(device.clone()).boxed());
 
 
+        let render_command_buffer = AutoCommandBufferBuilder::primary(
+            &command_buffer_allocator,
+            queue.queue_family_index(),
+            CommandBufferUsage::MultipleSubmit,
+        ).unwrap();
+
         (
             event_loop,
             Self {
                 render_struct: RenderCore {
+                    render_command_buffer,
                     settings,
                     window,
                     swapchain,
@@ -408,7 +449,7 @@ impl GraphicsCore {
     }
 
     pub(crate) fn update_terrain(&mut self, chunk: &Chunk, chunk_position: Vector3<i32>) {
-        let staging_buffer = self.buffers.get_staging_buffer();
+        /*let staging_buffer = self.buffers.get_staging_buffer();
         self.previous_frame_end
             .take()
             .unwrap()
@@ -458,7 +499,7 @@ impl GraphicsCore {
             .then_signal_fence_and_flush()
             .unwrap();
 
-        self.previous_frame_end  = Some(future.boxed());
+        self.previous_frame_end  = Some(future.boxed());*/
     }
 
     fn redraw(&mut self, push_constants: PushConstants) -> bool {
@@ -509,7 +550,7 @@ impl GraphicsCore {
         let mut builder = AutoCommandBufferBuilder::primary(
             &self.command_buffer_allocator,
             self.queue.queue_family_index(),
-            CommandBufferUsage::MultipleSubmit,
+            CommandBufferUsage::OneTimeSubmit,
         )
             .unwrap();
 

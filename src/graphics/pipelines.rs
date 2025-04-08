@@ -6,10 +6,12 @@ use vulkano::pipeline::layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineL
 use vulkano::shader::ShaderStages;
 use crate::graphics::push_constants::PushConstants;
 use crate::graphics::shaders;
+use crate::terrain::terrain_gen;
 
 pub struct Pipelines {
     pub(crate) raytrace_pipeline: Arc<ComputePipeline>,
-    pub(crate) terrain_generator_pipeline: Arc<ComputePipeline>
+    pub(crate) terrain_generator_pipeline: Arc<ComputePipeline>,
+    pub(crate) distance_field_pipeline: Arc<ComputePipeline>,
 }
 
 impl Pipelines {
@@ -17,6 +19,7 @@ impl Pipelines {
         Self{
             raytrace_pipeline: Self::create_raytrace_pipeline(device.clone()),
             terrain_generator_pipeline: Self::create_terrain_gen_pipeline(device.clone()),
+            distance_field_pipeline: Self::create_distance_field_pipeline(device.clone()),
         }
     }
 
@@ -46,7 +49,6 @@ impl Pipelines {
             device.clone(),
             None,
             ComputePipelineCreateInfo{
-
                 ..ComputePipelineCreateInfo::stage_layout(stage, layout)
             }
         ).unwrap()
@@ -65,6 +67,35 @@ impl Pipelines {
                     offset: 0,
                     size: size_of::<PushConstants>() as u32,
                 }],
+                ..PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage_info.clone()])
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap()
+            }
+        )
+            .unwrap();
+
+        ComputePipeline::new(
+            device.clone(),
+            None,
+            ComputePipelineCreateInfo::stage_layout(stage_info, layout),
+        )
+            .unwrap()
+    }
+
+    fn create_distance_field_pipeline(device: Arc<Device>) -> Arc<ComputePipeline> {
+        let compute_shader = terrain_gen::distance_field_cs::load(device.clone()).unwrap();
+        let entry_point = compute_shader.entry_point("main").unwrap();
+        
+        let stage_info = PipelineShaderStageCreateInfo::new(entry_point);
+
+        let layout = PipelineLayout::new(
+            device.clone(),
+            PipelineLayoutCreateInfo{
+                /*push_constant_ranges: vec![PushConstantRange{
+                    stages: ShaderStages::COMPUTE,
+                    offset: 0,
+                    size: size_of::<PushConstants>() as u32,
+                }],*/
                 ..PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage_info.clone()])
                     .into_pipeline_layout_create_info(device.clone())
                     .unwrap()

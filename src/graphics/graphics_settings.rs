@@ -9,7 +9,7 @@ impl GraphicsSettings {
     pub fn default() -> Self {
         Self{
             // as in distance in view direction
-            render_distance: 11,
+            render_distance: 1,
             fov: 90.0,
             mouse_sensitivity: (0.002, 0.002),
         }

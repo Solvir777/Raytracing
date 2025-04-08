@@ -4,25 +4,44 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
-layout(rg8ui, set = 0, binding = 0) writeonly readonly uniform uimage3D voxel_data;
+layout(r16ui, set = 0, binding = 0) readonly uniform uimage3D block_data;
+layout(r16ui, set = 0, binding = 1) uniform uimage3D distance_data;
+layout(push_constant) uniform PushConstants {
+    ivec3 chunk_position;
+} push;
 
 const int CHUNK_SIZE = 32;
 
 
 void compute_distances() {
-    ivec3 self_pos = ivec3(gl_GlobalInvocationID.xyz);
-    if(imageLoad(voxel_data).x > 0) {
-        return;
-    }
-    int img_size = imageSize(voxel_data).x;
-    for(int x = 0; x < img_size; x++) {
-        for(int y = 0; y < img_size; y++) {
-            for(int z = 0; z < img_size; z++) {
-                ivec3 diffs = min(abs(ivec3(x, y, z) - self_pos), abs(ivec3(x, y, z) - ivec3(img_size) - self_pos));
-                int min_diff = min(min(diffs.x, diffs.y), diffs.z);
-                imageAtomicMin(voxel_data, ivec3(x, y, z), min_diff);
+    ivec3 self_pos = push.chunk_position * CHUNK_SIZE + ivec3(gl_GlobalInvocationID.xyz);
+    uint self = imageLoad(block_data, rem_euclid_ivec3(self_pos, imageSize(block_data).x)).x;
+    if (self == 0) {
+        uint min_dist = 32;
+        for (uint local_x = 0; local_x < CHUNK_SIZE; local_x++) {
+            for (uint local_y = 0; local_y < CHUNK_SIZE; local_y++) {
+                for (uint local_z = 0; local_z < CHUNK_SIZE; local_z++) {
+                    ivec3 other_pos = push.chunk_position * CHUNK_SIZE + ivec3(local_x, local_y, local_z);
+                    ivec3 abs_diff = abs(self_pos - other_pos);
+                    uint chebyshev_dist =
+                    max(
+                        max(
+                            abs_diff.x,
+                            abs_diff.y
+                        ),
+                        abs_diff.z
+                    );
+                    if(
+                        chebyshev_dist < min_dist
+                        && imageLoad(block_data, rem_euclid_ivec3(other_pos, imageSize(block_data).x)).x > 0
+                    ) {
+                        min_dist = chebyshev_dist;
+                    }
+                }
             }
         }
+        min_dist = min(imageLoad(distance_data, rem_euclid_ivec3(self_pos, imageSize(block_data).x)).x, min_dist);
+        imageStore(distance_data, rem_euclid_ivec3(self_pos, imageSize(block_data).x), uvec4(min_dist));
     }
 }
 
