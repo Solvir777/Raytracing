@@ -68,7 +68,6 @@ impl GameState {
                             continue;
                         }
                     }
-                    println!("test");
                     core.upload_chunk_gpu(chunk_position, self);
                     //core.calculate_distance_field(chunk_position);
                 }
@@ -80,6 +79,7 @@ impl GameState {
         core.previous_frame_end = Some(vulkano::sync::now(core.device.clone()).boxed());
         println!("time to generate chunks: {} secs", t.elapsed().as_secs_f64());
 
+        core.reset_distance_field();
     }
 
 

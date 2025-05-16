@@ -5,24 +5,22 @@ mod shaders;
 mod pipelines;
 
 use std::sync::Arc;
-use std::time::Duration;
 use nalgebra::Vector3;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, BlitImageInfo, BufferImageCopy, ClearColorImageInfo, CommandBufferUsage, CopyBufferToImageInfo, CopyImageToBufferInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, ClearColorImageInfo, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceOwned, Queue, QueueCreateInfo, QueueFlags};
-use vulkano::image::view::{ImageView, ImageViewCreateInfo};
-use vulkano::image::{Image, ImageAspects, ImageCreateInfo, ImageSubresourceLayers, ImageSubresourceRange, ImageType, ImageUsage};
+use vulkano::image::view::{ImageView};
+use vulkano::image::{Image, ImageAspects, ImageCreateInfo, ImageSubresourceRange, ImageType, ImageUsage};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
-use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint};
 use vulkano::swapchain::{
     acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
 };
 use vulkano::sync::GpuFuture;
 use vulkano::{sync, DeviceSize, Validated, VulkanError, VulkanLibrary};
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::format::Format;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use winit::event::{DeviceEvent, Event, MouseScrollDelta, VirtualKeyCode, WindowEvent};
@@ -35,7 +33,6 @@ use crate::graphics::graphics_settings::GraphicsSettings;
 use crate::graphics::pipelines::Pipelines;
 use crate::graphics::push_constants::PushConstants;
 use crate::graphics::storage_buffers::StorageBuffers;
-use crate::terrain::block_ids::BlockType;
 use crate::terrain::chunk::Chunk;
 
 fn create_raytrace_descriptor_sets(
@@ -44,27 +41,21 @@ fn create_raytrace_descriptor_sets(
     pipeline: &Arc<ComputePipeline>,
     buffers: &StorageBuffers,
 ) -> Vec<Arc<PersistentDescriptorSet>> {
-    let swapchain_image_views = images
+    images
         .iter()
-        .map(|x| ImageView::new(x.clone(), ImageViewCreateInfo::from_image(x)).unwrap())
-        .collect::<Vec<_>>();
-
-    swapchain_image_views
-        .iter()
-        .map(|x| {
+        .map(|x|
             PersistentDescriptorSet::new(
                 descriptor_set_allocator,
                 pipeline.layout().set_layouts()[0].clone(),
                 [
-                    WriteDescriptorSet::image_view(0, x.clone()),
+                    WriteDescriptorSet::image_view(0, ImageView::new_default(x.clone()).unwrap()),
                     WriteDescriptorSet::image_view(1, ImageView::new_default(buffers.block_type_image.clone()).unwrap()),
                     WriteDescriptorSet::image_view(2, ImageView::new_default(buffers.distance_field_image.clone()).unwrap())
                 ],
                 [],
             )
-            .unwrap()
-        })
-        .collect::<Vec<_>>()
+                .unwrap()
+        ).collect()
 }
 
 fn create_swapchain(
@@ -155,6 +146,41 @@ pub struct GraphicsCore {
 impl GraphicsCore {
     pub const CHUNK_SIZE: u32 = 32;
     pub const CHUNK_SIZE_3: u32 = Self::CHUNK_SIZE * Self::CHUNK_SIZE * Self::CHUNK_SIZE;
+
+    pub(crate) fn reset_distance_field(&mut self) {
+        let mut builder = AutoCommandBufferBuilder::primary(
+            &self.command_buffer_allocator,
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        ).unwrap();
+
+        let clear_color_info = ClearColorImageInfo{
+            regions: vec!(
+                ImageSubresourceRange{
+                    aspects: ImageAspects::COLOR,
+                    mip_levels: 0..1,
+                    array_layers: 0..1,
+                }
+            ).into(),
+            ..ClearColorImageInfo::image(self.buffers.distance_field_image.clone())
+        };
+
+        builder
+            .clear_color_image(
+                clear_color_info
+            )
+            .unwrap();
+
+        let command_buffer = builder.build().unwrap();
+
+
+        self.previous_frame_end = Some(self
+            .previous_frame_end
+            .take()
+            .unwrap()
+            .then_execute(self.queue.clone(), command_buffer)
+            .unwrap().boxed());
+    }
 
     pub(crate) fn calculate_distance_field(&mut self, chunk_position: Vector3<i32>) {
         let mut builder = AutoCommandBufferBuilder::primary(
@@ -383,7 +409,7 @@ impl GraphicsCore {
                     settings,
                     window,
                     swapchain,
-                    raytrace_descriptorsets,
+                    raytrace_descriptorsets: raytrace_descriptorsets,
                     recreate_swapchain,
                 },
                 buffers,
@@ -502,13 +528,12 @@ impl GraphicsCore {
         self.previous_frame_end  = Some(future.boxed());*/
     }
 
-    fn redraw(&mut self, push_constants: PushConstants) -> bool {
+    fn redraw(&mut self, mut push_constants: PushConstants) -> bool {
         let image_extent: [u32; 2] = self.render_struct.window.inner_size().into();
 
         if image_extent.contains(&0) {
             return true;
         }
-        println!("debug");
 
         if self.render_struct.recreate_swapchain {
             let (new_swapchain, new_images) = self.render_struct
@@ -529,7 +554,6 @@ impl GraphicsCore {
             self.render_struct.recreate_swapchain = false;
             self.render_struct.swapchain = new_swapchain;
         }
-        println!("debug");
 
         let (image_index, suboptimal, acquire_future) =
             match acquire_next_image(self.render_struct.swapchain.clone(), None)
@@ -543,7 +567,6 @@ impl GraphicsCore {
                 Err(e) => panic!("failed to acquire next image: {e}"),
             };
 
-        println!("debug 1");
         if suboptimal {
             self.render_struct.recreate_swapchain = true;
         }
@@ -554,15 +577,16 @@ impl GraphicsCore {
         )
             .unwrap();
 
-        println!("debug 1");
+        push_constants.image_index = image_index;
         builder
             .bind_pipeline_compute(self.pipelines.raytrace_pipeline.clone())
             .unwrap()
             .push_constants(
                 self.pipelines.raytrace_pipeline.layout().clone(),
                 0,
-                push_constants.transform
-            ).unwrap()
+                push_constants
+            )
+            .unwrap()
             .bind_descriptor_sets(
                 PipelineBindPoint::Compute,
                 self.pipelines.raytrace_pipeline.layout().clone(),
@@ -570,14 +594,12 @@ impl GraphicsCore {
                 self.render_struct.raytrace_descriptorsets[image_index as usize].clone(),
             )
             .unwrap()
-            .dispatch([image_extent[0] / 16, image_extent[1] / 16, 1])
+            .dispatch([image_extent[0] / 16 + 1, image_extent[1] / 16 + 1, 1])
             .unwrap();
 
-        println!("debug 1");
         let command_buffer = builder.build().unwrap();
 
 
-        println!("debug a");
         let future = self
             .previous_frame_end
             .take()
@@ -594,7 +616,6 @@ impl GraphicsCore {
             )
             .then_signal_fence_and_flush();
 
-        println!("debug 2");
         match future.map_err(Validated::unwrap) {
             Ok(future) => {
                 self.previous_frame_end = Some(future.boxed());
@@ -609,7 +630,6 @@ impl GraphicsCore {
             }
         }
 
-        println!("debug 3");
         false
     }
     fn chunk_pos_to_image_dest(chunk_pos: Vector3<i32>, gen_dist: u8) -> Vector3<u32> {

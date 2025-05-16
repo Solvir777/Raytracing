@@ -21,7 +21,8 @@ fn main() {
         game_state.update_player(game_state.speed_modifier, core);
 
         return PushConstants{
-            transform: game_state.get_player_transform()
+            transform: game_state.get_player_transform(),
+            image_index: 0,
         }
     });
 }

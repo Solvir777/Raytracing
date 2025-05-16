@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use vulkano::descriptor_set::layout::{DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo, DescriptorType};
 use vulkano::device::Device;
 use vulkano::pipeline::{ComputePipeline, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::pipeline::compute::ComputePipelineCreateInfo;
@@ -59,6 +60,44 @@ impl Pipelines {
         let entry_point = compute_shader.entry_point("main").unwrap();
         let stage_info = PipelineShaderStageCreateInfo::new(entry_point);
 
+
+        let descriptor_set_layout = DescriptorSetLayout::new(
+            device.clone(),
+            DescriptorSetLayoutCreateInfo {
+                bindings: [
+                    // Binding 0: Swapchain Images (Array of Storage Images)
+                    (
+                        0,
+                        DescriptorSetLayoutBinding {
+                            descriptor_count: 2, // Number of swapchain images (adjust if needed)
+                            stages: ShaderStages::COMPUTE,
+                            ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageImage)
+                        },
+                    ),
+                    // Binding 1: block_type_image (Single Storage Image)
+                    (
+                        1,
+                        DescriptorSetLayoutBinding {
+                            descriptor_count: 1,
+                            stages: ShaderStages::COMPUTE,
+                            ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageImage)
+                        },
+                    ),
+                    // Binding 2: distance_field_image (Single Storage Image)
+                    (
+                        2,
+                        DescriptorSetLayoutBinding {
+                            descriptor_count: 1,
+                            stages: ShaderStages::COMPUTE,
+                            ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageImage)
+                        },
+                    ),
+                ].into(),
+                ..Default::default()
+            },
+        ).unwrap();
+
+
         let layout = PipelineLayout::new(
             device.clone(),
             PipelineLayoutCreateInfo{
@@ -67,6 +106,7 @@ impl Pipelines {
                     offset: 0,
                     size: size_of::<PushConstants>() as u32,
                 }],
+                set_layouts: vec!(descriptor_set_layout),
                 ..PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage_info.clone()])
                     .into_pipeline_layout_create_info(device.clone())
                     .unwrap()

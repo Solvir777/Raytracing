@@ -7,5 +7,8 @@ void main() {
     uvec2 invocation_id = (gl_GlobalInvocationID.xy);
     imageLoad(block_data, ivec3(0));
     vec4 to_write = vec4(raycast(), 1.);
+    if(length(vec2(invocation_id.xy) - vec2(imageSize(render_target) / 2)) < 1.2) {
+        to_write = vec4(1., 0.3, 0.3, 1.);
+    }
     imageStore(render_target, ivec2(invocation_id.x, imageSize(render_target).y - invocation_id.y), to_write);
 }
